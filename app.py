@@ -5,9 +5,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
 import io
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import re
-from collections import Counter
-import csv
 
 # Set page config
 st.set_page_config(
@@ -25,6 +24,8 @@ This advanced tool analyzes content similarity across multiple dimensions:
 - **Keyword/query overlap** (search intent matching)
 - **Semantic similarity** (overall content theme)
 - **Composite cannibalization score** (smart weighted average)
+
+✅ **New**: Automatic URL normalization to prevent false positives from parameter variations
 """)
 
 # Helper functions
@@ -34,137 +35,111 @@ def clean_text(text):
         return ""
     return str(text).lower().strip()
 
-def detect_csv_delimiter(file_content, max_chars=5000):
+def normalize_url(url):
     """
-    Detect CSV delimiter using multiple methods
+    Normalize URL by removing parameters and fragments that can cause false positives
+    
+    Args:
+        url (str): Original URL
+    
+    Returns:
+        str: Normalized URL without parameters, fragments, or tracking codes
     """
+    if pd.isna(url) or not url:
+        return ""
+    
+    url = str(url).strip()
+    
+    # Handle URL encoding issues (like %20 for spaces)
     try:
-        # Get a sample of the file content
-        sample = file_content[:max_chars]
+        from urllib.parse import unquote
+        url = unquote(url)
+    except:
+        pass
+    
+    # Remove common tracking parameters and fragments
+    try:
+        parsed = urlparse(url)
         
-        # Method 1: Use csv.Sniffer with common delimiters
-        try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=',;\t|')
-            return dialect.delimiter
-        except:
-            pass
+        # Remove query parameters (everything after ?)
+        # This removes &, ?, = parameters automatically
+        clean_url = urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            '',  # Remove params
+            '',  # Remove query
+            ''   # Remove fragment (# parameters)
+        ))
         
-        # Method 2: Count common delimiters and choose most frequent
-        delimiters = [',', ';', '\t', '|']
-        delimiter_counts = {}
+        # Clean up the path
+        clean_url = clean_url.rstrip('/')  # Remove trailing slashes
+        clean_url = clean_url.strip()      # Remove any whitespace
         
-        lines = sample.split('\n')[:10]  # Check first 10 lines
+        # Convert to lowercase for consistency
+        clean_url = clean_url.lower()
         
-        for delimiter in delimiters:
-            counts = [line.count(delimiter) for line in lines if line.strip()]
-            if counts:
-                # Check if delimiter count is consistent across lines
-                avg_count = sum(counts) / len(counts)
-                consistency = len([c for c in counts if c == counts[0]]) / len(counts)
-                delimiter_counts[delimiter] = (avg_count, consistency)
-        
-        # Choose delimiter with highest average count and good consistency
-        if delimiter_counts:
-            best_delimiter = max(delimiter_counts.items(), 
-                               key=lambda x: x[1][0] * x[1][1])
-            return best_delimiter[0]
-        
-        # Default fallback
-        return ','
+        return clean_url
         
     except Exception:
-        return ','
+        # Fallback: manual cleaning for malformed URLs
+        url = url.lower().strip()
+        
+        # Remove fragments (#)
+        if '#' in url:
+            url = url.split('#')[0]
+        
+        # Remove query parameters (?)
+        if '?' in url:
+            url = url.split('?')[0]
+        
+        # Remove trailing slash
+        url = url.rstrip('/')
+        
+        return url
 
-def robust_csv_read(file, encoding_attempts=['utf-8', 'latin-1', 'cp1252']):
+def deduplicate_urls(df, url_column):
     """
-    Robustly read CSV file with multiple fallback strategies
-    """
-    # Get file content as string for delimiter detection
-    try:
-        file.seek(0)
-        content = file.read()
-        if isinstance(content, bytes):
-            # Try different encodings to decode
-            for encoding in encoding_attempts:
-                try:
-                    content_str = content.decode(encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            else:
-                content_str = content.decode('utf-8', errors='replace')
-        else:
-            content_str = content
-        
-        # Reset file pointer
-        file.seek(0)
-        
-        # Detect delimiter
-        delimiter = detect_csv_delimiter(content_str)
-        
-        # Strategy 1: Try with detected delimiter and Python engine
-        try:
-            df = pd.read_csv(
-                file, 
-                sep=delimiter, 
-                engine='python',
-                encoding='utf-8',
-                on_bad_lines='skip',
-                quoting=csv.QUOTE_MINIMAL
-            )
-            if not df.empty and len(df.columns) > 1:
-                return df, None
-        except Exception as e1:
-            file.seek(0)
-            
-            # Strategy 2: Try with auto-detection
-            try:
-                df = pd.read_csv(
-                    file,
-                    sep=None,
-                    engine='python',
-                    encoding='utf-8',
-                    on_bad_lines='skip'
-                )
-                if not df.empty:
-                    return df, None
-            except Exception as e2:
-                file.seek(0)
-                
-                # Strategy 3: Try different encodings
-                for encoding in encoding_attempts:
-                    try:
-                        file.seek(0)
-                        df = pd.read_csv(
-                            file,
-                            sep=delimiter,
-                            engine='python',
-                            encoding=encoding,
-                            on_bad_lines='skip',
-                            error_bad_lines=False
-                        )
-                        if not df.empty:
-                            return df, f"Used encoding: {encoding}"
-                    except Exception:
-                        continue
-                
-                # Strategy 4: Last resort - try with C engine and basic parameters
-                try:
-                    file.seek(0)
-                    df = pd.read_csv(
-                        file,
-                        sep=delimiter,
-                        encoding='utf-8',
-                        engine='c',
-                        error_bad_lines=False,
-                        warn_bad_lines=False
-                    )
-                    return df, "Used C engine with error skipping"
-                except Exception as e4:
-                    return None, f"All parsing methods failed. Last error: {str(e4)}"
+    Remove duplicate URLs after normalization, keeping the first occurrence
     
-    except Exception as e:
-        return None, f"File reading failed: {str(e)}"
+    Args:
+        df (pd.DataFrame): DataFrame with URLs
+        url_column (str): Name of the URL column
+    
+    Returns:
+        tuple: (cleaned_df, removed_count, duplicate_report)
+    """
+    original_count = len(df)
+    
+    # Add normalized URL column
+    df['normalized_url'] = df[url_column].apply(normalize_url)
+    
+    # Track duplicates for reporting
+    duplicate_groups = df.groupby('normalized_url').agg({
+        url_column: list,
+        'normalized_url': 'first'
+    }).reset_index(drop=True)
+    
+    # Find groups with multiple URLs (duplicates)
+    duplicates = duplicate_groups[duplicate_groups[url_column].apply(len) > 1]
+    
+    # Keep only the first occurrence of each normalized URL
+    df_cleaned = df.drop_duplicates(subset=['normalized_url'], keep='first')
+    
+    # Create duplicate report
+    duplicate_report = []
+    for _, group in duplicates.iterrows():
+        original_urls = group[url_column]
+        normalized = group['normalized_url']
+        duplicate_report.append({
+            'normalized_url': normalized,
+            'original_urls': original_urls,
+            'count': len(original_urls)
+        })
+    
+    removed_count = original_count - len(df_cleaned)
+    
+    return df_cleaned, removed_count, duplicate_report
 
 def calculate_text_similarity(texts1, texts2):
     """Calculate cosine similarity between text pairs using TF-IDF"""
@@ -248,27 +223,16 @@ with col2:
 
 if internal_file and gsc_file:
     with st.spinner('Loading files...'):
-        # Load internal HTML data with robust parsing
-        st.info("📊 Loading Internal HTML Report...")
-        internal_df, internal_message = robust_csv_read(internal_file)
+        # Load internal HTML data
+        try:
+            # Try semicolon delimiter first (common in SEO tools)
+            internal_df = pd.read_csv(internal_file, sep=';', encoding='utf-8')
+        except:
+            # Fallback to comma delimiter
+            internal_df = pd.read_csv(internal_file, encoding='utf-8')
         
-        if internal_df is None:
-            st.error(f"❌ Failed to load Internal HTML Report: {internal_message}")
-            st.stop()
-        
-        if internal_message:
-            st.warning(f"⚠️ Internal HTML Report: {internal_message}")
-        
-        # Load GSC data with robust parsing
-        st.info("📊 Loading GSC Report...")
-        gsc_df, gsc_message = robust_csv_read(gsc_file)
-        
-        if gsc_df is None:
-            st.error(f"❌ Failed to load GSC Report: {gsc_message}")
-            st.stop()
-        
-        if gsc_message:
-            st.warning(f"⚠️ GSC Report: {gsc_message}")
+        # Load GSC data
+        gsc_df = pd.read_csv(gsc_file, encoding='utf-8')
     
     st.success(f"✅ Files loaded successfully!")
     
@@ -279,25 +243,21 @@ if internal_file and gsc_file:
     with col2:
         st.metric("Total Queries (GSC)", len(gsc_df))
 
-    # Show column information for debugging
-    with st.expander("🔍 File Structure Analysis"):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**Internal HTML Columns:**")
-            st.write(list(internal_df.columns))
-        with col2:
-            st.write("**GSC Columns:**")
-            st.write(list(gsc_df.columns))
-
     # Process GSC data to aggregate queries by URL
     with st.spinner('Processing GSC data...'):
         # Clean column names
         gsc_df.columns = gsc_df.columns.str.strip()
         
-        # Aggregate queries by landing page
+        # Normalize GSC URLs as well
+        if 'Landing Page' in gsc_df.columns:
+            gsc_df['normalized_landing_page'] = gsc_df['Landing Page'].apply(normalize_url)
+        elif 'URL' in gsc_df.columns:
+            gsc_df['normalized_landing_page'] = gsc_df['URL'].apply(normalize_url)
+        
+        # Aggregate queries by normalized landing page
         url_queries = {}
         for _, row in gsc_df.iterrows():
-            url = row.get('Landing Page', row.get('URL', ''))
+            url = row.get('normalized_landing_page', normalize_url(row.get('Landing Page', row.get('URL', ''))))
             query = row.get('Query', '')
             clicks = row.get('Clicks', row.get(' Clicks ', 0))
             
@@ -326,29 +286,57 @@ if internal_file and gsc_file:
 
         st.info(f"Detected columns - URL: {url_column}, Title: {title_column}, H1: {h1_column}")
 
-    # Filter for valid URLs
+    # Filter for valid URLs and normalize
     if url_column:
         # Keep only HTTP/HTTPS URLs
         internal_df = internal_df[internal_df[url_column].str.contains('http', na=False)]
         internal_df = internal_df[~internal_df[url_column].str.contains('redirect', na=False, case=False)]
         
-        st.metric("Valid URLs for analysis", len(internal_df))
+        # URL Normalization and Deduplication
+        with st.spinner('🧹 Normalizing URLs and removing duplicates...'):
+            cleaned_df, removed_count, duplicate_report = deduplicate_urls(internal_df, url_column)
+        
+        # Show deduplication results
+        if removed_count > 0:
+            st.warning(f"🧹 **URL Cleaning Results**: Removed {removed_count} duplicate URLs with parameters")
+            
+            with st.expander(f"📋 View {len(duplicate_report)} duplicate groups"):
+                for i, dup in enumerate(duplicate_report[:10]):  # Show first 10
+                    st.write(f"**Group {i+1}:** `{dup['normalized_url']}`")
+                    for orig_url in dup['original_urls']:
+                        st.write(f"  - {orig_url}")
+                    st.write("---")
+                
+                if len(duplicate_report) > 10:
+                    st.info(f"... and {len(duplicate_report) - 10} more duplicate groups")
+        else:
+            st.success("✅ No URL duplicates found - your data is already clean!")
+        
+        # Use cleaned data for analysis
+        internal_df = cleaned_df
+        
+        st.metric("Valid URLs for analysis (after deduplication)", len(internal_df))
 
         # Process similarity analysis
         with st.spinner('Calculating multi-dimensional similarity...'):
             results = []
-            urls = internal_df[url_column].tolist()
+            # Use normalized URLs for the analysis
+            urls = internal_df['normalized_url'].tolist()
+            original_urls = internal_df[url_column].tolist()  # Keep originals for display
             n = len(urls)
 
             # Prepare data for each URL
             url_data = {}
             for idx, row in internal_df.iterrows():
-                url = row[url_column]
-                url_data[url] = {
+                normalized_url = row['normalized_url']
+                original_url = row[url_column]
+                
+                url_data[normalized_url] = {
+                    'original_url': original_url,  # Store original for display
                     'title': clean_text(row.get(title_column, '')) if title_column else '',
                     'h1': clean_text(row.get(h1_column, '')) if h1_column else '',
                     'meta': clean_text(row.get(meta_column, '')) if meta_column else '',
-                    'queries': [q['query'] for q in url_queries.get(url, [])],
+                    'queries': [q['query'] for q in url_queries.get(normalized_url, [])],
                     'intent': detect_intent_from_title(row.get(title_column, '')) if title_column else 'unknown',
                     'embedding': row.get(embedding_column, '') if embedding_column else ''
                 }
@@ -393,7 +381,7 @@ if internal_file and gsc_file:
                     url1 = urls[i]
                     url2 = urls[j]
 
-                    # Skip if same domain path
+                    # Skip if same URL (shouldn't happen after deduplication, but safety check)
                     if url1 == url2:
                         continue
 
@@ -438,8 +426,10 @@ if internal_file and gsc_file:
                     same_intent = intent1 == intent2
 
                     results.append({
-                        'URL_1': url1,
-                        'URL_2': url2,
+                        'URL_1': url_data[url1]['original_url'],  # Use original URLs for display
+                        'URL_2': url_data[url2]['original_url'],  # Use original URLs for display
+                        'Normalized_URL_1': url1,  # Keep normalized for debugging
+                        'Normalized_URL_2': url2,  # Keep normalized for debugging
                         'Composite_Score': round(composite_score, 1),
                         'Title_Similarity': round(title_sim, 1),
                         'H1_Similarity': round(h1_sim, 1),
@@ -461,7 +451,7 @@ if internal_file and gsc_file:
             results_df = pd.DataFrame(results)
             results_df = results_df.sort_values('Composite_Score', ascending=False)
 
-            st.success(f"✅ Analysis complete! Analyzed {len(results_df):,} URL pairs")
+            st.success(f"✅ Analysis complete! Analyzed {len(results_df):,} URL pairs (after removing duplicates)")
 
             # Summary statistics
             st.markdown("### 📊 Cannibalization Risk Overview")
@@ -592,7 +582,12 @@ if internal_file and gsc_file:
 CONTENT CANNIBALIZATION ANALYSIS SUMMARY
 Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 
-OVERVIEW:
+URL CLEANING RESULTS:
+- Original URLs: {len(internal_df) + removed_count}
+- Duplicate URLs removed: {removed_count}
+- Clean URLs analyzed: {len(internal_df)}
+
+ANALYSIS OVERVIEW:
 - Total URL pairs analyzed: {len(results_df):,}
 - High risk pairs: {len(results_df[results_df['Risk_Level'] == 'High'])}
 - Medium risk pairs: {len(results_df[results_df['Risk_Level'] == 'Medium'])}
@@ -617,6 +612,9 @@ TOP CANNIBALIZATION RISKS:
             very_high_title_sim = len(results_df[results_df['Title_Similarity'] > 90])
             high_keyword_overlap = len(results_df[results_df['Keyword_Overlap'] > 70])
             insights = []
+
+            if removed_count > 0:
+                insights.append(f"🧹 Removed {removed_count} duplicate URLs with parameters - analysis is now more accurate")
 
             if very_high_title_sim > 0:
                 insights.append(f"⚠️ Found {very_high_title_sim} URL pairs with >90% title similarity - consider differentiating titles")
@@ -671,26 +669,34 @@ else:
         - Overall content theme alignment
         - Least weighted for niche sites
 
+        **🧹 URL Normalization (NEW):**
+        - Automatically removes URL parameters (&, ?, =, #)
+        - Prevents false positives from tracking codes
+        - Deduplicates similar URLs before analysis
+
         **Risk Levels:**
         - **High**: Same intent + >80% composite score
         - **Medium**: 60-80% composite score
         - **Low**: <60% composite score
         """)
 
-    with st.expander("🛠️ CSV File Troubleshooting"):
+    with st.expander("🛠️ URL Parameter Examples"):
         st.markdown("""
-        **Common CSV Issues & Solutions:**
+        **URLs that will be normalized:**
         
-        - **Mixed delimiters**: App auto-detects commas, semicolons, tabs
-        - **Encoding problems**: Tries UTF-8, Latin-1, CP1252 automatically
-        - **Malformed rows**: Skips problematic rows with warnings
-        - **Empty files**: Validates file content before processing
+        ✅ **Before normalization:**
+        - `https://example.com/page?utm_source=google&utm_medium=cpc`
+        - `https://example.com/page#section1`
+        - `https://example.com/page?ref=homepage&track=123`
+        - `https://example.com/page%20` (with URL encoding)
         
-        **If you still have issues:**
-        1. Open your CSV in Excel/Google Sheets
-        2. Save as "CSV UTF-8" format
-        3. Check for special characters in data
-        4. Ensure consistent column structure
+        ✅ **After normalization:**
+        - `https://example.com/page`
+        - `https://example.com/page`
+        - `https://example.com/page`
+        - `https://example.com/page`
+        
+        **Result:** Only one comparison instead of false positives between similar URLs.
         """)
 
 # Footer
