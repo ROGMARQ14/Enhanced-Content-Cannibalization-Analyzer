@@ -7,6 +7,7 @@ import io
 from datetime import datetime
 import re
 from collections import Counter
+import json
 
 # Set page config
 st.set_page_config(
@@ -25,6 +26,20 @@ This advanced tool analyzes content similarity across multiple dimensions:
 - **Semantic similarity** (overall content theme)
 - **Composite cannibalization score** (smart weighted average)
 """)
+
+# OpenAI API Key section
+with st.sidebar:
+    st.markdown("### 🤖 AI-Powered Analysis")
+    openai_api_key = st.text_input(
+        "OpenAI API Key (Optional)",
+        type="password",
+        help="Enter your OpenAI API key to get AI-powered insights and recommendations"
+    )
+    
+    if openai_api_key:
+        st.success("✅ API Key provided - AI insights will be available")
+    else:
+        st.info("💡 Add OpenAI API key for detailed recommendations")
 
 # Helper functions
 def clean_text(text):
@@ -58,24 +73,132 @@ def calculate_text_similarity(texts1, texts2):
     except:
         return np.zeros((len(texts1), len(texts2)))
 
-def calculate_keyword_overlap(keywords1, keywords2):
-    """Calculate Jaccard similarity between keyword sets"""
-    if not keywords1 or not keywords2:
-        return 0.0
-    
-    set1 = set(keywords1)
-    set2 = set(keywords2)
-    
-    if not set1 or not set2:
-        return 0.0
-    
-    intersection = set1.intersection(set2)
-    union = set1.union(set2)
-    
-    return len(intersection) / len(union) if union else 0.0
+def get_ai_insights(results_df, openai_api_key):
+    """Generate AI-powered insights using OpenAI"""
+    try:
+        import openai
+        
+        # Configure OpenAI
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Prepare data for analysis
+        high_risk = results_df[results_df['Risk_Level'] == 'High'].head(20)
+        
+        # Create a summary for the AI
+        analysis_data = {
+            "total_pairs": len(results_df),
+            "high_risk_count": len(results_df[results_df['Risk_Level'] == 'High']),
+            "medium_risk_count": len(results_df[results_df['Risk_Level'] == 'Medium']),
+            "avg_composite_score": float(results_df['Composite_Score'].mean()),
+            "top_issues": []
+        }
+        
+        for _, row in high_risk.head(10).iterrows():
+            analysis_data["top_issues"].append({
+                "url1": row['URL_1'],
+                "url2": row['URL_2'],
+                "composite_score": float(row['Composite_Score']),
+                "title_similarity": float(row['Title_Similarity']),
+                "keyword_overlap": float(row['Keyword_Overlap']),
+                "same_intent": row['Same_Intent']
+            })
+        
+        # Create prompt
+        prompt = f"""
+        You are an expert SEO Strategist specializing in identifying and resolving content cannibalization issues. Your goal is to transform raw cannibalization data into a strategic, actionable executive report that a marketing team can implement to improve organic search performance.
+
+Website Context:
+
+Business Goal: [e.g., "Generate qualified B2B leads," "Drive e-commerce sales for consumer electronics," "Increase ad revenue through pageviews"]
+
+Target Audience: [e.g., "CMOs at mid-size tech companies," "DIY home improvement enthusiasts," "Students seeking financial aid advice"]
+
+Input Data:
+Here is the content cannibalization analysis data, presented in JSON format. Each entry represents a keyword for which multiple URLs from our site are competing.
+
+json
+{json.dumps(analysis_data, indent=2)}
+Task: Generate a comprehensive SEO report with the following sections:
+
+1. Executive Summary:
+
+Provide a 2-3 sentence overview of the key findings.
+
+Assess the severity of the content cannibalization issue and its current impact on SEO performance (e.g., suppressed rankings, diluted authority, poor user experience).
+
+Summarize the high-level strategic direction recommended in this report.
+
+2. Top 5 Priority Actions:
+
+Present the five most critical cannibalization issues to address first.
+
+Prioritize based on a combination of keyword commercial value, search volume, and the potential for significant performance uplift.
+
+Format this as a table with the following columns: Priority, Keyword, Competing URLs, Recommended Action, Rationale & Expected Outcome.
+
+3. Content Consolidation & Pruning Plan:
+
+Identify specific clusters of pages that should be merged or redirected.
+
+For each cluster, recommend a single "canonical" (winner) URL to become the primary target.
+
+List the "loser" URLs that should be 301 redirected or have their content merged into the winner.
+
+Format this as a table with the following columns: Canonical URL (Winner), URLs to Consolidate/Redirect (Losers), Justification for Choice.
+
+4. Quick Wins (Low-Effort, High-Impact):
+
+List at least three immediate fixes that require minimal resources (e.g., can be done in under an hour).
+
+Focus on actions like:
+
+Optimizing title tags and meta descriptions to differentiate intent.
+
+Adjusting internal links to signal the most important page to search engines.
+
+Slightly de-optimizing a competing page for the target keyword.
+
+5. Long-Term Strategy & Prevention:
+
+Provide strategic recommendations to prevent future content cannibalization.
+
+Include guidelines for the content creation workflow, such as:
+
+A process for checking existing content before creating new articles.
+
+A keyword-to-URL mapping strategy.
+
+Best practices for internal linking to reinforce topical authority.
+
+Tone and Formatting:
+
+Tone: Be professional, data-driven, and authoritative.
+
+Formatting: Use Markdown for clarity. Employ bolding for key terms and use tables where requested to ensure the report is scannable and actionable.
+
+Constraint: Do not simply restate the data from the JSON. Your value is in the interpretation, strategic insights, and actionable recommendations.
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert SEO consultant specializing in content strategy and cannibalization issues."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1500
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"Error generating AI insights: {str(e)}"
 
 def detect_intent_from_title(title):
     """Detect content intent from title patterns"""
+    if pd.isna(title) or title is None:
+        return 'unknown'
+    
     title_lower = str(title).lower()
     
     # Intent patterns
@@ -87,10 +210,26 @@ def detect_intent_from_title(title):
         return 'informational'
     elif any(word in title_lower for word in ['buy', 'price', 'cost', 'cheap', 'deal', 'discount']):
         return 'transactional'
-    elif '?' in title:
+    elif '?' in title_lower:
         return 'question'
     else:
         return 'general'
+
+def is_clean_url(url):
+    """Check if URL is clean (no parameters)"""
+    if pd.isna(url) or not url:
+        return False
+    
+    url_str = str(url)
+    
+    # Check for common parameter indicators
+    parameter_chars = ['?', '&', '=', '#', '%5B', '%5D', 'utm_', 'fbclid', 'gclid']
+    
+    for char in parameter_chars:
+        if char in url_str:
+            return False
+    
+    return True
 
 # File upload section
 col1, col2 = st.columns(2)
@@ -174,7 +313,14 @@ if internal_file and gsc_file:
         internal_df = internal_df[internal_df[url_column].str.contains('http', na=False)]
         internal_df = internal_df[~internal_df[url_column].str.contains('redirect', na=False, case=False)]
         
+        # Remove URLs with parameters
+        internal_df['is_clean'] = internal_df[url_column].apply(is_clean_url)
+        excluded_urls = len(internal_df[~internal_df['is_clean']])
+        internal_df = internal_df[internal_df['is_clean']].drop('is_clean', axis=1)
+        
         st.metric("Valid URLs for analysis", len(internal_df))
+        if excluded_urls > 0:
+            st.warning(f"Excluded {excluded_urls} URLs with parameters (?, &, #, etc.)")
     
     # Process similarity analysis
     with st.spinner('Calculating multi-dimensional similarity...'):
@@ -316,7 +462,10 @@ if internal_file and gsc_file:
         st.metric("Same Intent >70%", same_intent_high)
     
     # Detailed Analysis Tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["🚨 High Risk Pairs", "📊 All Results", "🎯 By Intent", "📥 Download"])
+    if openai_api_key:
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🚨 High Risk Pairs", "📊 All Results", "🎯 By Intent", "🤖 AI Insights", "📥 Download"])
+    else:
+        tab1, tab2, tab3, tab4 = st.tabs(["🚨 High Risk Pairs", "📊 All Results", "🎯 By Intent", "📥 Download"])
     
     with tab1:
         st.markdown("### High Risk Cannibalization Candidates")
@@ -395,7 +544,44 @@ if internal_file and gsc_file:
             for intent, count in same_intent_issues.items():
                 st.write(f"- {intent}: {count} high-similarity pairs")
     
-    with tab4:
+    # AI Insights tab (if API key provided)
+    if openai_api_key:
+        with tab4:
+            st.markdown("### 🤖 AI-Powered Analysis & Recommendations")
+            
+            if st.button("Generate AI Insights", type="primary"):
+                with st.spinner("Analyzing your content with AI... This may take a moment."):
+                    ai_insights = get_ai_insights(results_df, openai_api_key)
+                    
+                    if "Error" in ai_insights:
+                        st.error(ai_insights)
+                    else:
+                        # Display AI insights in a nice format
+                        st.markdown(ai_insights)
+                        
+                        # Option to download AI insights
+                        st.download_button(
+                            label="📥 Download AI Insights",
+                            data=ai_insights,
+                            file_name=f"ai_insights_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                            mime="text/plain"
+                        )
+            
+            st.info("""
+            💡 **What the AI analyzes:**
+            - Your top cannibalization issues
+            - Content consolidation opportunities
+            - Quick wins for immediate impact
+            - Long-term content strategy recommendations
+            """)
+        
+        # Download tab is now tab5 when AI is enabled
+        download_tab = tab5
+    else:
+        # Download tab is tab4 when AI is not enabled
+        download_tab = tab4
+    
+    with download_tab:
         st.markdown("### Download Complete Analysis")
         
         # Prepare download data
@@ -481,6 +667,10 @@ else:
     2. **GSC Report** (from Google Search Console)
        - Must contain: Queries and Landing Pages
        - Helps identify keyword cannibalization
+    
+    3. **OpenAI API Key** (Optional)
+       - Add in the sidebar for AI-powered insights
+       - Get your key at: https://platform.openai.com/api-keys
     """)
     
     with st.expander("📖 How this enhanced analysis works"):
