@@ -73,7 +73,7 @@ def calculate_text_similarity(texts1, texts2):
     except:
         return np.zeros((len(texts1), len(texts2)))
 
-def get_ai_insights(results_df, openai_api_key):
+def get_ai_insights(results_df, openai_api_key, business_goal="", target_audience=""):
     """Generate AI-powered insights using OpenAI"""
     try:
         import openai
@@ -99,94 +99,74 @@ def get_ai_insights(results_df, openai_api_key):
                 "url2": row['URL_2'],
                 "composite_score": float(row['Composite_Score']),
                 "title_similarity": float(row['Title_Similarity']),
+                "h1_similarity": float(row['H1_Similarity']),
+                "meta_similarity": float(row['Meta_Similarity']),
                 "keyword_overlap": float(row['Keyword_Overlap']),
-                "same_intent": row['Same_Intent']
+                "same_intent": row['Same_Intent'],
+                "intent1": row['Intent_1'],
+                "intent2": row['Intent_2']
             })
         
-        # Create prompt
+        # Create enhanced prompt
         prompt = f"""
-        You are an expert SEO Strategist specializing in identifying and resolving content cannibalization issues. Your goal is to transform raw cannibalization data into a strategic, actionable executive report that a marketing team can implement to improve organic search performance.
+You are an expert SEO Strategist specializing in identifying and resolving content cannibalization issues. Your goal is to transform raw cannibalization data into a strategic, actionable executive report that a marketing team can implement to improve organic search performance.
 
-Website Context:
+**Website Context:**
+* **Business Goal:** {business_goal if business_goal else "[Not specified - assume general organic traffic growth]"}
+* **Target Audience:** {target_audience if target_audience else "[Not specified - analyze based on URL patterns]"}
 
-Business Goal: [e.g., "Generate qualified B2B leads," "Drive e-commerce sales for consumer electronics," "Increase ad revenue through pageviews"]
+**Input Data:** Here is the content cannibalization analysis data, presented in JSON format. Each entry represents a pair of URLs from our site that are potentially competing.
 
-Target Audience: [e.g., "CMOs at mid-size tech companies," "DIY home improvement enthusiasts," "Students seeking financial aid advice"]
-
-Input Data:
-Here is the content cannibalization analysis data, presented in JSON format. Each entry represents a keyword for which multiple URLs from our site are competing.
-
-json
+```json
 {json.dumps(analysis_data, indent=2)}
-Task: Generate a comprehensive SEO report with the following sections:
+```
 
-1. Executive Summary:
+**Task: Generate a comprehensive SEO report with the following sections:**
 
-Provide a 2-3 sentence overview of the key findings.
+**1. Executive Summary:**
+* Provide a 2-3 sentence overview of the key findings.
+* Assess the severity of the content cannibalization issue and its current impact on SEO performance (e.g., suppressed rankings, diluted authority, poor user experience).
+* Summarize the high-level strategic direction recommended in this report.
 
-Assess the severity of the content cannibalization issue and its current impact on SEO performance (e.g., suppressed rankings, diluted authority, poor user experience).
+**2. Top 5 Priority Actions:**
+* Present the five most critical cannibalization issues to address first.
+* Prioritize based on a combination of similarity scores, intent matching, and the potential for significant performance uplift.
+* **Format this as a table** with the following columns: `Priority`, `URL Pair`, `Similarity Score`, `Recommended Action`, `Rationale & Expected Outcome`.
 
-Summarize the high-level strategic direction recommended in this report.
+**3. Content Consolidation & Pruning Plan:**
+* Identify specific clusters of pages that should be merged or redirected.
+* For each cluster, recommend a single "canonical" (winner) URL to become the primary target.
+* List the "loser" URLs that should be 301 redirected or have their content merged into the winner.
+* **Format this as a table** with the following columns: `Canonical URL (Winner)`, `URLs to Consolidate/Redirect (Losers)`, `Justification for Choice`.
 
-2. Top 5 Priority Actions:
+**4. Quick Wins (Low-Effort, High-Impact):**
+* List at least three immediate fixes that require minimal resources (e.g., can be done in under an hour).
+* Focus on actions like:
+   * Optimizing title tags and meta descriptions to differentiate intent.
+   * Adjusting internal links to signal the most important page to search engines.
+   * Slightly de-optimizing a competing page for the target keyword.
 
-Present the five most critical cannibalization issues to address first.
+**5. Long-Term Strategy & Prevention:**
+* Provide strategic recommendations to prevent future content cannibalization.
+* Include guidelines for the content creation workflow, such as:
+   * A process for checking existing content before creating new articles.
+   * A keyword-to-URL mapping strategy.
+   * Best practices for internal linking to reinforce topical authority.
 
-Prioritize based on a combination of keyword commercial value, search volume, and the potential for significant performance uplift.
-
-Format this as a table with the following columns: Priority, Keyword, Competing URLs, Recommended Action, Rationale & Expected Outcome.
-
-3. Content Consolidation & Pruning Plan:
-
-Identify specific clusters of pages that should be merged or redirected.
-
-For each cluster, recommend a single "canonical" (winner) URL to become the primary target.
-
-List the "loser" URLs that should be 301 redirected or have their content merged into the winner.
-
-Format this as a table with the following columns: Canonical URL (Winner), URLs to Consolidate/Redirect (Losers), Justification for Choice.
-
-4. Quick Wins (Low-Effort, High-Impact):
-
-List at least three immediate fixes that require minimal resources (e.g., can be done in under an hour).
-
-Focus on actions like:
-
-Optimizing title tags and meta descriptions to differentiate intent.
-
-Adjusting internal links to signal the most important page to search engines.
-
-Slightly de-optimizing a competing page for the target keyword.
-
-5. Long-Term Strategy & Prevention:
-
-Provide strategic recommendations to prevent future content cannibalization.
-
-Include guidelines for the content creation workflow, such as:
-
-A process for checking existing content before creating new articles.
-
-A keyword-to-URL mapping strategy.
-
-Best practices for internal linking to reinforce topical authority.
-
-Tone and Formatting:
-
-Tone: Be professional, data-driven, and authoritative.
-
-Formatting: Use Markdown for clarity. Employ bolding for key terms and use tables where requested to ensure the report is scannable and actionable.
-
-Constraint: Do not simply restate the data from the JSON. Your value is in the interpretation, strategic insights, and actionable recommendations.
-        """
+**Tone and Formatting:**
+* **Tone:** Be professional, data-driven, and authoritative.
+* **Formatting:** Use Markdown for clarity. Employ **bolding** for key terms and use tables where requested to ensure the report is scannable and actionable.
+* **Constraint:** Do not simply restate the data from the JSON. Your value is in the interpretation, strategic insights, and actionable recommendations.
+"""
         
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are an expert SEO consultant specializing in content strategy and cannibalization issues."},
+                {"role": "system", "content": "You are an expert SEO consultant specializing in content strategy and cannibalization issues. Provide strategic, actionable insights based on data analysis."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=1500
+            max_tokens=2500
         )
         
         return response.choices[0].message.content
@@ -230,6 +210,67 @@ def is_clean_url(url):
             return False
     
     return True
+
+def get_ai_insights(results_df, openai_api_key):
+    """Generate AI-powered insights using OpenAI"""
+    try:
+        import openai
+        
+        # Configure OpenAI
+        client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Prepare data for analysis
+        high_risk = results_df[results_df['Risk_Level'] == 'High'].head(20)
+        
+        # Create a summary for the AI
+        analysis_data = {
+            "total_pairs": len(results_df),
+            "high_risk_count": len(results_df[results_df['Risk_Level'] == 'High']),
+            "medium_risk_count": len(results_df[results_df['Risk_Level'] == 'Medium']),
+            "avg_composite_score": float(results_df['Composite_Score'].mean()),
+            "top_issues": []
+        }
+        
+        for _, row in high_risk.head(10).iterrows():
+            analysis_data["top_issues"].append({
+                "url1": row['URL_1'],
+                "url2": row['URL_2'],
+                "composite_score": float(row['Composite_Score']),
+                "title_similarity": float(row['Title_Similarity']),
+                "keyword_overlap": float(row['Keyword_Overlap']),
+                "same_intent": row['Same_Intent']
+            })
+        
+        # Create prompt
+        prompt = f"""
+        As an SEO expert, analyze this content cannibalization data and provide actionable insights:
+        
+        {json.dumps(analysis_data, indent=2)}
+        
+        Please provide:
+        1. Executive Summary (2-3 sentences on the severity of cannibalization issues)
+        2. Top 5 Priority Actions (specific, actionable recommendations)
+        3. Content Consolidation Opportunities (which pages should be merged)
+        4. Quick Wins (easy fixes that can be implemented immediately)
+        5. Long-term Strategy Recommendations
+        
+        Focus on practical, implementable solutions that will improve SEO performance.
+        """
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert SEO consultant specializing in content strategy and cannibalization issues."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1500
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        return f"Error generating AI insights: {str(e)}"
 
 # File upload section
 col1, col2 = st.columns(2)
@@ -549,9 +590,25 @@ if internal_file and gsc_file:
         with tab4:
             st.markdown("### 🤖 AI-Powered Analysis & Recommendations")
             
+            # Context inputs for better AI analysis
+            col1, col2 = st.columns(2)
+            with col1:
+                business_goal = st.text_input(
+                    "Business Goal (Optional)",
+                    placeholder="e.g., Generate qualified B2B leads",
+                    help="Helps AI tailor recommendations to your specific objectives"
+                )
+            
+            with col2:
+                target_audience = st.text_input(
+                    "Target Audience (Optional)",
+                    placeholder="e.g., CMOs at mid-size tech companies",
+                    help="Helps AI understand user intent and content priorities"
+                )
+            
             if st.button("Generate AI Insights", type="primary"):
                 with st.spinner("Analyzing your content with AI... This may take a moment."):
-                    ai_insights = get_ai_insights(results_df, openai_api_key)
+                    ai_insights = get_ai_insights(results_df, openai_api_key, business_goal, target_audience)
                     
                     if "Error" in ai_insights:
                         st.error(ai_insights)
@@ -563,16 +620,17 @@ if internal_file and gsc_file:
                         st.download_button(
                             label="📥 Download AI Insights",
                             data=ai_insights,
-                            file_name=f"ai_insights_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                            mime="text/plain"
+                            file_name=f"ai_seo_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                            mime="text/markdown"
                         )
             
             st.info("""
             💡 **What the AI analyzes:**
-            - Your top cannibalization issues
-            - Content consolidation opportunities
-            - Quick wins for immediate impact
-            - Long-term content strategy recommendations
+            - Executive summary with severity assessment
+            - Top 5 priority actions in table format
+            - Content consolidation plan with winner/loser URLs
+            - Quick wins requiring minimal effort
+            - Long-term prevention strategies
             """)
         
         # Download tab is now tab5 when AI is enabled
