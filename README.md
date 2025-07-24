@@ -1,4 +1,4 @@
-# Enhanced Content Cannibalization Analyzer - FIXED VERSION
+# Enhanced Content Cannibalization Analyzer - v2.0
 
 ## 🚨 Problem Solved: CSV ParserError Fixed!
 
