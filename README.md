@@ -1,140 +1,185 @@
-# Semantic Similarity Analysis App
+# Enhanced Content Cannibalization Analyzer - FIXED VERSION
 
-A Streamlit application for analyzing semantic similarity between blog posts using embeddings to detect content cannibalization and editorial outliers.
+## 🚨 Problem Solved: CSV ParserError Fixed!
 
-## 🎯 Purpose
+The original app was failing with `pandas.errors.ParserError` due to encoding issues, delimiter problems, and poor CSV handling. This fixed version includes comprehensive CSV parsing improvements.
 
-This tool helps content managers and SEO specialists:
-- Identify potential content cannibalization (similar content competing for the same keywords)
-- Detect outlier content that doesn't align with the editorial line
-- Optimize content strategy by understanding semantic relationships between pages
+## ✅ Key Fixes
 
-## 🚀 Quick Start
+### 1. **Robust CSV Parsing**
+- **Encoding Detection**: Automatically detects UTF-8, Latin-1, Windows-1252, and other encodings
+- **Delimiter Detection**: Auto-detects comma, semicolon, tab, pipe, and other delimiters
+- **Error Handling**: Graceful handling of malformed CSV files with detailed error messages
+- **Data Validation**: Comprehensive validation of required columns and data formats
 
-### Option 1: Run Locally
+### 2. **Enhanced User Experience**
+- **Better Error Messages**: Clear, actionable error messages instead of cryptic pandas errors
+- **File Preview**: Shows loaded data before analysis
+- **Progress Indicators**: Real-time feedback during file loading and analysis
+- **Validation Reports**: Detailed validation of uploaded files
 
-1. Clone this repository or download the files
-2. Install dependencies:
+### 3. **Improved Architecture**
+- **Modular Design**: Clean separation of concerns with dedicated modules
+- **Extensible**: Easy to add new features and data sources
+- **Maintainable**: Well-structured codebase with proper logging
+
+## 🚀 How to Use the Fixed Version
+
+### Option 1: Use `app_fixed.py` (Recommended)
 ```bash
-pip install -r requirements.txt
+streamlit run app_fixed.py
 ```
-3. Run the app:
-```bash
-streamlit run app.py
-```
-4. Open your browser to `http://localhost:8501`
 
-### Option 2: Deploy on Streamlit Cloud
-
-1. Push the code to a GitHub repository
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your GitHub account
-4. Deploy the app by selecting your repository
-
-## 📋 Requirements
-
-Create a `requirements.txt` file with:
-```
-streamlit==1.28.0
-pandas==2.1.1
-numpy==1.24.3
-scikit-learn==1.3.0
-openpyxl==3.1.2
-```
+### Option 2: Replace Original `app.py`
+If you prefer to use the original filename, you can replace the content of `app.py` with the fixed version.
 
 ## 📁 File Structure
 
 ```
-semantic-similarity-app/
-│
-├── app.py              # Main Streamlit application
-├── requirements.txt    # Python dependencies
-└── README.md          # This file
+Enhanced-Content-Cannibalization-Analyzer-main/
+├── app.py                    # Original (may have parsing issues)
+├── app_fixed.py             # Fixed version with robust parsing
+├── src/                     # New modular architecture
+│   ├── __init__.py
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   └── data_loader.py   # Robust CSV loading
+│   ├── analyzers/
+│   │   ├── __init__.py
+│   │   └── similarity_calculator.py
+│   ├── processors/
+│   │   ├── __init__.py
+│   │   └── data_processor.py
+│   └── reports/
+│       ├── __init__.py
+│       └── report_generator.py
+├── csv_parser_fix.py        # Standalone CSV fixing utility
+└── requirements.txt         # Updated dependencies
 ```
 
-## 📊 Input File Format
+## 🔧 Troubleshooting Common Issues
 
-The app expects an Excel file (.xlsx or .xls) with:
-- **Column 1**: URLs of the web pages
-- **Column 2**: Embeddings as comma-separated numbers
+### Issue 1: "ParserError: Error tokenizing data"
+**Solution**: The fixed version automatically handles:
+- Different encodings (UTF-8, Latin-1, Windows-1252)
+- Various delimiters (comma, semicolon, tab, pipe)
+- Quoted fields with embedded delimiters
+- Malformed rows with missing data
 
-Example:
-| URL | Embeddings |
-|-----|------------|
-| https://example.com/page1 | 0.123,-0.456,0.789,... |
-| https://example.com/page2 | 0.321,-0.654,0.987,... |
+### Issue 2: "UnicodeDecodeError"
+**Solution**: Automatic encoding detection tries multiple encodings:
+- UTF-8 (with and without BOM)
+- Latin-1 (ISO-8859-1)
+- Windows-1252
+- CP1252
 
-## 🔧 How It Works
+### Issue 3: "EmptyDataError"
+**Solution**: Better validation shows exactly what's wrong:
+- Empty files
+- Files with only headers
+- Files with invalid formats
 
-1. **Upload**: Drag and drop your Excel file
-2. **Processing**: The app converts embeddings and calculates cosine similarity
-3. **Analysis**: 
-   - Shows similarity scores for all URL pairs
-   - Identifies potential cannibalization (>85% similarity)
-   - Detects outlier content
-4. **Download**: Export complete results as CSV
+## 📊 Required File Formats
 
-## 📈 Features
+### Internal SEO Report
+**Required columns** (auto-detected):
+- URL/Address/Page
+- Title/Title 1
+- H1/H1-1
+- Meta Description/Meta Description 1
 
-### Interactive Analysis
-- Adjustable similarity threshold for preview
-- Summary statistics
-- Top similar pairs visualization
+**Example formats accepted**:
+```csv
+Address,Title 1,H1-1,Meta Description 1
+https://example.com/page1,Page Title,H1 Text,Meta description...
+https://example.com/page2,Another Title,Different H1,Another description...
+```
 
-### Automatic Detection
-- **Cannibalization Alert**: Pairs with >85% similarity
-- **Outlier Detection**: Content that differs significantly from editorial line
-- **Statistical Summary**: Average, max, and min similarity scores
+### Google Search Console Report
+**Required columns** (auto-detected):
+- Landing Page/Page/URL
+- Query/Keyword/Search Term
 
-### Export Options
-- Full CSV export with all URL pairs
-- Similarity scores in both decimal and percentage format
-- Timestamped filenames for tracking
+**Example formats accepted**:
+```csv
+Landing page,Query
+https://example.com/page1,keyword research
+https://example.com/page1,seo tools
+https://example.com/page2,content marketing
+```
 
-## 📝 Output CSV Format
+## 🎯 New Features in Fixed Version
 
-The downloaded CSV contains:
-- `URL_1`: First URL in the pair
-- `URL_2`: Second URL in the pair
-- `Similarity_Score`: Raw cosine similarity (0-1)
-- `Similarity_Percentage`: Similarity as percentage (0-100%)
+### 1. **Advanced CSV Options**
+- **Delimiter Detection**: Automatically detects comma, semicolon, tab, pipe
+- **Encoding Options**: Handles UTF-8, Latin-1, Windows-1252
+- **Header Detection**: Finds headers even with different column names
+- **Data Cleaning**: Removes empty rows and cleans URLs
 
-## 💡 Interpreting Results
+### 2. **Enhanced Analysis**
+- **Customizable Weights**: Adjust similarity weights in the sidebar
+- **Priority Actions**: Generates actionable recommendations
+- **Consolidation Plans**: Suggests which pages to merge/redirect
+- **Multiple Export Formats**: CSV, JSON, TXT, priority lists
 
-### Similarity Ranges
-- **>85%**: High risk of cannibalization - consider consolidating or differentiating
-- **70-85%**: Moderate similarity - ensure different keyword targets
-- **<40%**: Low similarity - verify content aligns with site theme
+### 3. **Better Error Handling**
+- **File Validation**: Checks files before processing
+- **Column Detection**: Finds required columns automatically
+- **Data Quality**: Validates data types and formats
+- **User Feedback**: Clear error messages with solutions
 
-### Action Items
-1. Review high-similarity pairs for consolidation opportunities
-2. Check outliers to ensure brand consistency
-3. Use similarity data to inform content planning
+## 🛠️ Installation & Setup
 
-## 🐛 Troubleshooting
+### Requirements
+```bash
+pip install -r requirements.txt
+```
 
-### Memory Issues
-If processing large files (>1000 URLs):
-- Consider using Google Colab for more resources
-- Process in batches
-- Upgrade Streamlit Cloud plan
+### Running the Fixed Version
+```bash
+# Option 1: Use the fixed app directly
+streamlit run app_fixed.py
 
-### File Upload Errors
-- Ensure Excel file has exactly 2 columns
-- Check embeddings are comma-separated numbers
-- Verify no empty rows
+# Option 2: Run the CSV fixing utility first
+python csv_parser_fix.py your_file.csv
+```
 
-## 🤝 Contributing
+## 📈 Performance Improvements
 
-Feel free to submit issues or pull requests to improve the app!
+- **Faster Loading**: Optimized CSV parsing with chunking
+- **Memory Efficient**: Handles large files without memory issues
+- **Better Caching**: Improved Streamlit caching for faster re-runs
+- **Progress Tracking**: Real-time progress indicators
 
-## 📄 License
+## 🔍 Debugging CSV Issues
 
-This project is open source and available under the MIT License.
+If you're still having issues, use the standalone CSV fixing utility:
 
-## 🙏 Acknowledgments
+```bash
+python csv_parser_fix.py your_problematic_file.csv
+```
 
-Built with:
-- [Streamlit](https://streamlit.io/) for the web interface
-- [scikit-learn](https://scikit-learn.org/) for similarity calculations
-- [pandas](https://pandas.pydata.org/) for data manipulation
+This will:
+1. Detect encoding issues
+2. Identify delimiter problems
+3. Validate column structure
+4. Generate a cleaned version
+5. Provide detailed diagnostics
+
+## 📞 Support
+
+For issues with the fixed version:
+1. Check the error messages in the app
+2. Use the CSV fixing utility for diagnostics
+3. Ensure your files match the expected formats above
+4. Try saving your CSV as UTF-8 encoded with comma delimiters
+
+## 🔄 Migration from Original
+
+To migrate from the original app:
+1. **Backup your original files**
+2. **Use `app_fixed.py`** instead of `app.py`
+3. **No code changes needed** - just upload your CSV files
+4. **All original features preserved** plus new robust parsing
+
+The fixed version is fully backward compatible with your existing CSV files but handles edge cases much better.
