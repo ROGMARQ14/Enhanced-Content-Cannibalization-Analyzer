@@ -1,141 +1,229 @@
 """
-Robust data loading utilities for handling various CSV formats and encodings.
+Robust data loading utilities for CSV files with comprehensive error handling.
 """
 
 import pandas as pd
 import chardet
-import io
 import logging
-from typing import Optional, Dict, Any
+from typing import Dict, Any, List
+import io
+import csv
 
 logger = logging.getLogger(__name__)
 
+
 class DataLoader:
-    """Handles robust CSV loading with encoding and delimiter detection."""
+    """Robust CSV data loader with encoding and delimiter detection."""
     
     @staticmethod
     def detect_encoding(file_content: bytes) -> str:
-        """Detect file encoding using chardet."""
-        result = chardet.detect(file_content)
-        return result['encoding'] or 'utf-8'
+        """Detect file encoding from content."""
+        try:
+            result = chardet.detect(file_content)
+            encoding = result['encoding'] or 'utf-8'
+            confidence = result['confidence'] or 0.0
+            
+            logger.info(
+                f"Detected encoding: {encoding} "
+                f"(confidence: {confidence:.2f})"
+            )
+            return encoding
+        except Exception as e:
+            logger.warning(f"Encoding detection failed: {e}")
+            return 'utf-8'
     
     @staticmethod
     def detect_delimiter(sample: str) -> str:
-        """Detect CSV delimiter from sample content."""
-        delimiters = [',', ';', '\t', '|']
-        lines = sample.split('\n')[:5]  # Check first 5 lines
-        
-        for delimiter in delimiters:
-            if all(delimiter in line for line in lines if line.strip()):
-                return delimiter
-        
-        return ','  # Default to comma
-    
-    @classmethod
-    def load_csv(cls, file, file_name: str = "uploaded_file") -> pd.DataFrame:
-        """
-        Robust CSV loader that handles encoding and delimiter issues.
-        
-        Args:
-            file: File-like object or file path
-            file_name: Name for error reporting
-            
-        Returns:
-            pandas.DataFrame
-        """
+        """Detect CSV delimiter from sample."""
         try:
-            # Read raw content
-            if hasattr(file, 'read'):
-                file_content = file.read()
-                file.seek(0)  # Reset file pointer
+            sniffer = csv.Sniffer()
+            delimiter = sniffer.sniff(sample).delimiter
+            logger.info(f"Detected delimiter: '{delimiter}'")
+            return delimiter
+        except Exception:
+            logger.warning("Delimiter detection failed, using comma")
+            return ','
+    
+    @staticmethod
+    def clean_column_names(columns: List[str]) -> List[str]:
+        """Clean and standardize column names."""
+        cleaned = []
+        for col in columns:
+            if pd.isna(col):
+                cleaned.append('Unnamed_Column')
             else:
-                with open(file, 'rb') as f:
-                    file_content = f.read()
+                col_str = str(col).strip()
+                col_str = col_str.replace('\n', ' ').replace('\r', ' ')
+                col_str = col_str.replace('"', '').replace("'", '')
+                col_str = col_str.lower()
+                cleaned.append(col_str)
+        return cleaned
+    
+    @staticmethod
+    def load_csv(file, file_type: str = "data") -> pd.DataFrame:
+        """Load CSV file with robust error handling."""
+        logger.info(f"Loading {file_type} file: {file.name}")
+        
+        try:
+            # Read file content
+            file_content = file.read()
             
             # Detect encoding
-            encoding = cls.detect_encoding(file_content)
-            logger.info(f"Detected encoding: {encoding} for {file_name}")
+            encoding = DataLoader.detect_encoding(file_content)
             
             # Decode content
             try:
                 content_str = file_content.decode(encoding)
             except UnicodeDecodeError:
-                # Fallback to utf-8 with error handling
-                content_str = file_content.decode('utf-8', errors='ignore')
-                logger.warning(f"Used fallback decoding for {file_name}")
+                # Fallback encodings
+                fallback_encodings = ['latin1', 'cp1252', 'iso-8859-1']
+                for fallback_encoding in fallback_encodings:
+                    try:
+                        content_str = file_content.decode(fallback_encoding)
+                        logger.info(
+                            f"Used fallback encoding: {fallback_encoding}"
+                        )
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    raise ValueError(
+                        "Could not decode file with any encoding"
+                    )
             
             # Detect delimiter
-            delimiter = cls.detect_delimiter(content_str)
-            logger.info(f"Detected delimiter: '{delimiter}' for {file_name}")
+            delimiter = DataLoader.detect_delimiter(content_str[:2000])
             
-            # Load DataFrame
-            if hasattr(file, 'read'):
-                file.seek(0)
-                df = pd.read_csv(file, sep=delimiter, encoding=encoding, on_bad_lines='skip')
-            else:
-                df = pd.read_csv(file, sep=delimiter, encoding=encoding, on_bad_lines='skip')
+            # Read CSV
+            na_values = ['', 'NA', 'N/A', 'null', 'NULL', 'None', 'nan', 'NaN']
+            df = pd.read_csv(
+                io.StringIO(content_str),
+                delimiter=delimiter,
+                on_bad_lines='warn',
+                skip_blank_lines=True,
+                na_values=na_values,
+                keep_default_na=True,
+                low_memory=False,
+                dtype=str
+            )
             
-            logger.info(f"Successfully loaded {len(df)} rows from {file_name}")
+            # Clean column names
+            df.columns = DataLoader.clean_column_names(df.columns)
+            
+            # Remove completely empty rows
+            df = df.dropna(how='all')
+            
+            # Remove completely empty columns
+            df = df.dropna(axis=1, how='all')
+            
+            logger.info(
+                f"Successfully loaded {len(df)} rows "
+                f"and {len(df.columns)} columns"
+            )
+            
             return df
             
         except Exception as e:
-            logger.error(f"Failed to load {file_name}: {str(e)}")
-            raise ValueError(f"Could not parse {file_name}: {str(e)}")
+            logger.error(f"Error loading CSV: {str(e)}")
+            raise ValueError(f"Failed to load {file_type}: {str(e)}")
     
     @staticmethod
     def validate_seo_data(df: pd.DataFrame, data_type: str) -> Dict[str, Any]:
-        """Validate SEO data structure and identify key columns."""
-        
-        validation_result = {
-            'valid': False,
+        """Validate SEO data structure."""
+        validation = {
+            'valid': True,
+            'issues': [],
             'url_column': None,
             'title_column': None,
             'h1_column': None,
-            'meta_column': None,
-            'embedding_column': None,
-            'issues': []
+            'meta_column': None
         }
         
         if df.empty:
-            validation_result['issues'].append("Empty dataset")
-            return validation_result
+            validation['valid'] = False
+            validation['issues'].append("DataFrame is empty")
+            return validation
         
-        # Normalize column names
-        df.columns = df.columns.str.strip()
+        columns = df.columns.tolist()
         
-        # Find URL column
-        url_candidates = ['URL', 'Address', 'url', 'address', 'Page', 'page']
-        for candidate in url_candidates:
-            matches = [col for col in df.columns if candidate.lower() in col.lower()]
-            if matches:
-                validation_result['url_column'] = matches[0]
-                break
-        
-        if not validation_result['url_column']:
-            validation_result['issues'].append("No URL column found")
-            return validation_result
-        
-        # Find other columns
-        column_mappings = {
-            'title_column': ['Title 1', 'Title', 'title', 'Page Title', 'Meta Title'],
-            'h1_column': ['H1-1', 'H1', 'h1', 'H1 Tag', 'Header 1'],
-            'meta_column': ['Meta Description 1', 'Meta Description', 'meta description', 'Description'],
-            'embedding_column': ['embedding', 'Embedding', 'Vector', 'vector']
-        }
-        
-        for key, candidates in column_mappings.items():
-            for candidate in candidates:
-                matches = [col for col in df.columns if candidate.lower() in col.lower()]
-                if matches:
-                    validation_result[key] = matches[0]
+        if data_type == 'internal':
+            # Find URL column
+            url_candidates = ['url', 'address', 'page', 'uri', 'link']
+            for col in columns:
+                if any(candidate in col for candidate in url_candidates):
+                    validation['url_column'] = col
+                    break
+            
+            if not validation['url_column']:
+                validation['valid'] = False
+                validation['issues'].append("No URL column found")
+            
+            # Find Title column
+            title_candidates = ['title', 'title1', 'page title', 'meta title']
+            for col in columns:
+                if any(candidate in col for candidate in title_candidates):
+                    validation['title_column'] = col
+                    break
+            
+            if not validation['title_column']:
+                validation['valid'] = False
+                validation['issues'].append("No Title column found")
+            
+            # Find H1 column
+            h1_candidates = ['h1', 'h1-1', 'heading1', 'header1']
+            for col in columns:
+                if any(candidate in col for candidate in h1_candidates):
+                    validation['h1_column'] = col
+                    break
+            
+            if not validation['h1_column']:
+                validation['valid'] = False
+                validation['issues'].append("No H1 column found")
+            
+            # Find Meta Description column (optional)
+            meta_candidates = [
+                'meta description', 'meta desc', 'description',
+                'meta_description'
+            ]
+            for col in columns:
+                if any(candidate in col for candidate in meta_candidates):
+                    validation['meta_column'] = col
                     break
         
-        # Check for required columns
-        if data_type == 'internal':
-            if not validation_result['title_column']:
-                validation_result['issues'].append("No title column found")
-            if not validation_result['h1_column']:
-                validation_result['issues'].append("No H1 column found")
+        elif data_type == 'gsc':
+            # Find URL/Page column
+            url_candidates = ['url', 'page', 'landing page', 'landing_page']
+            for col in columns:
+                if any(candidate in col for candidate in url_candidates):
+                    validation['url_column'] = col
+                    break
+            
+            if not validation['url_column']:
+                validation['valid'] = False
+                validation['issues'].append("No URL/Page column found")
+            
+            # Find Query column
+            query_candidates = [
+                'query', 'keyword', 'search term', 'search_term'
+            ]
+            for col in columns:
+                if any(candidate in col for candidate in query_candidates):
+                    validation['title_column'] = col
+                    break
+            
+            if not validation['title_column']:
+                validation['valid'] = False
+                validation['issues'].append("No Query column found")
         
-        validation_result['valid'] = len(validation_result['issues']) == 0
-        return validation_result
+        return validation
+    
+    @staticmethod
+    def get_data_summary(df: pd.DataFrame) -> Dict[str, Any]:
+        """Get summary statistics for the loaded data."""
+        return {
+            'rows': len(df),
+            'columns': len(df.columns),
+            'column_names': df.columns.tolist(),
+            'null_counts': df.isnull().sum().to_dict(),
+            'sample_data': df.head(3).to_dict('records')
+        }

@@ -4,18 +4,18 @@ Robust CSV parsing with comprehensive error handling
 """
 
 import streamlit as st
-import pandas as pd
 import numpy as np
 import logging
-import sys
 from datetime import datetime
 import io
-import base64
+import sys
+import os
 
-# Import our new modules
-from src.utils.data_loader import DataLoader
-from src.processors.data_processor import DataProcessor
-from src.reports.report_generator import ReportGenerator
+# Add src directory to path for imports
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
+from utils.data_loader import DataLoader
+from processors.data_processor import DataProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -44,14 +44,7 @@ This **FIXED VERSION** resolves the pandas ParserError issues with robust CSV pa
 - ✅ Clean reports without NaN values
 """)
 
-# Initialize session state for results persistence
-if 'analysis_results' not in st.session_state:
-    st.session_state.analysis_results = None
-if 'analysis_summary' not in st.session_state:
-    st.session_state.analysis_summary = None
 
-# Helper functions
-@st.cache_data
 def load_and_validate_files(internal_file, gsc_file):
     """Load and validate both files with comprehensive error handling."""
     
@@ -63,7 +56,10 @@ def load_and_validate_files(internal_file, gsc_file):
         # Validate internal data
         validation = DataLoader.validate_seo_data(internal_df, 'internal')
         if not validation['valid']:
-            st.error(f"❌ Internal data validation failed: {', '.join(validation['issues'])}")
+            st.error(
+                f"❌ Internal data validation failed: "
+                f"{', '.join(validation['issues'])}"
+            )
             return None, None
         
         # Load GSC data
@@ -73,7 +69,10 @@ def load_and_validate_files(internal_file, gsc_file):
         # Validate GSC data
         gsc_validation = DataLoader.validate_seo_data(gsc_df, 'gsc')
         if not gsc_validation['valid']:
-            st.error(f"❌ GSC data validation failed: {', '.join(gsc_validation['issues'])}")
+            st.error(
+                f"❌ GSC data validation failed: "
+                f"{', '.join(gsc_validation['issues'])}"
+            )
             return None, None
         
         st.success("✅ Both files loaded successfully!")
@@ -83,6 +82,7 @@ def load_and_validate_files(internal_file, gsc_file):
         st.error(f"❌ Error loading files: {str(e)}")
         logger.error(f"File loading error: {str(e)}")
         return None, None
+
 
 def clean_dataframe_for_export(df):
     """Clean dataframe by removing NaN values and formatting for export."""
@@ -95,15 +95,24 @@ def clean_dataframe_for_export(df):
     # Convert float columns to strings with proper formatting
     float_cols = clean_df.select_dtypes(include=[np.float64, np.float32]).columns
     for col in float_cols:
-        clean_df[col] = clean_df[col].apply(lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else str(x))
+        clean_df[col] = clean_df[col].apply(
+            lambda x: f"{x:.2f}" if isinstance(x, (int, float)) else str(x)
+        )
     
     # Ensure all data is string for consistent export
     clean_df = clean_df.astype(str)
     
     return clean_df
 
+
 def main():
     """Main application function."""
+    
+    # Initialize session state for results persistence
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = None
+    if 'analysis_summary' not in st.session_state:
+        st.session_state.analysis_summary = None
     
     # Sidebar for file uploads
     with st.sidebar:
@@ -126,9 +135,6 @@ def main():
         # Analysis settings
         st.markdown("### ⚙️ Analysis Settings")
         
-        # Weights configuration - Simplified without Meta Description
-        st.markdown("**Similarity Weights:**")
-        
         # Updated weights without Meta Description
         title_weight = st.slider("Title Similarity", 0.0, 1.0, 0.45, 0.05)
         h1_weight = st.slider("H1 Similarity", 0.0, 1.0, 0.30, 0.05)
@@ -147,7 +153,7 @@ def main():
         weights = {
             'title': title_weight,
             'h1': h1_weight,
-            'meta': 0.0,  # Removed from UI
+            'meta': 0.0,
             'keywords': keyword_weight,
             'semantic': semantic_weight
         }
@@ -182,7 +188,9 @@ def main():
                         processor.weights = weights
                         
                         # Run analysis
-                        results = processor.process_complete_analysis(internal_df, gsc_df)
+                        results = processor.process_complete_analysis(
+                            internal_df, gsc_df
+                        )
                         summary = processor.get_summary_stats(results)
                         
                         # Clean results before storing
@@ -281,7 +289,10 @@ TOP CANNIBALIZATION RISKS:
                         score = str(row['Composite_Score']).strip()
                         risk = str(row['Risk_Level']).strip()
                         if url1 and url2 and url1 != 'nan' and url2 != 'nan':
-                            summary_text += f"\n{url1}\n  vs {url2}\n  Score: {score}% | Risk: {risk}\n"
+                            summary_text += (
+                                f"\n{url1}\n  vs {url2}\n"
+                                f"  Score: {score}% | Risk: {risk}\n"
+                            )
                     
                     # Priority actions (cleaned)
                     priority_actions = results[results['Risk_Level'] == 'High'].head(20)
@@ -376,6 +387,7 @@ TOP CANNIBALIZATION RISKS:
             - **Semantic Similarity (10%)**: Overall content theme
             - **Meta Description (0%)**: Removed from analysis settings
             """)
+
 
 # Footer
 st.markdown("---")
