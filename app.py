@@ -5,9 +5,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
 import io
 from datetime import datetime
-import re
-from collections import Counter
 import json
+import chardet
 
 # Set page config
 st.set_page_config(
@@ -41,13 +40,14 @@ with st.sidebar:
     else:
         st.info("💡 Add OpenAI API key for detailed recommendations")
 
-# Helper functions
+
 @st.cache_data
 def clean_text(text):
     """Clean and normalize text for comparison"""
     if pd.isna(text) or text is None:
         return ""
     return str(text).lower().strip()
+
 
 @st.cache_data
 def calculate_text_similarity(texts1, texts2):
@@ -72,8 +72,9 @@ def calculate_text_similarity(texts1, texts2):
         
         # Calculate similarity
         return cosine_similarity(matrix1, matrix2)
-    except:
+    except Exception:
         return np.zeros((len(texts1), len(texts2)))
+
 
 def calculate_keyword_overlap(keywords1, keywords2):
     """Calculate Jaccard similarity between keyword sets"""
@@ -90,6 +91,7 @@ def calculate_keyword_overlap(keywords1, keywords2):
     union = set1.union(set2)
     
     return len(intersection) / len(union) if union else 0.0
+
 
 def detect_intent_from_title(title):
     """Detect content intent from title patterns"""
@@ -112,6 +114,7 @@ def detect_intent_from_title(title):
     else:
         return 'general'
 
+
 def is_clean_url(url):
     """Check if URL is clean (no parameters)"""
     if pd.isna(url) or not url:
@@ -127,6 +130,217 @@ def is_clean_url(url):
             return False
     
     return True
+
+
+def robust_csv_reader(file, file_name="uploaded_file"):
+    """
+    Robust CSV reader that handles various encoding and delimiter issues
+    
+    Args:
+        file: File-like object or file path
+        file_name: Name of the file for error messages
+    
+    Returns:
+        pandas.DataFrame or None if parsing fails
+    """
+    
+    # Read the raw file content
+    if hasattr(file, 'read'):
+        raw_data = file.read()
+        file.seek(0)  # Reset file pointer
+    else:
+        with open(file, 'rb') as f:
+            raw_data = f.read()
+    
+    # Detect encoding
+    encoding_result = chardet.detect(raw_data)
+    detected_encoding = encoding_result['encoding'] or 'utf-8'
+    
+    # Convert to string for analysis
+    try:
+        text_content = raw_data.decode(detected_encoding)
+    except UnicodeDecodeError:
+        # Fallback encodings
+        for encoding in ['utf-8-sig', 'latin1', 'cp1252', 'iso-8859-1']:
+            try:
+                text_content = raw_data.decode(encoding)
+                detected_encoding = encoding
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            raise ValueError(f"Unable to decode file {file_name} with any common encoding")
+    
+    # Detect delimiter
+    first_lines = text_content.split('\n')[:5]
+    delimiters = [',', ';', '\t', '|']
+    delimiter_scores = {}
+    
+    for delimiter in delimiters:
+        scores = []
+        for line in first_lines:
+            if line.strip():
+                scores.append(line.count(delimiter))
+        if scores and all(s > 0 for s in scores):
+            # Consistent delimiter usage
+            delimiter_scores[delimiter] = sum(scores) / len(scores)
+    
+    # Choose best delimiter
+    if delimiter_scores:
+        best_delimiter = max(delimiter_scores, key=delimiter_scores.get)
+    else:
+        best_delimiter = ','
+    
+    # Try to read with detected parameters
+    try:
+        # Try with detected delimiter and encoding
+        if hasattr(file, 'read'):
+            file.seek(0)
+        df = pd.read_csv(file, delimiter=best_delimiter, encoding=detected_encoding)
+        return df
+    
+    except pd.errors.ParserError as e:
+        # Handle specific parsing errors
+        if hasattr(file, 'read'):
+            file.seek(0)
+        
+        # Try with different approaches
+        try:
+            # Skip bad lines
+            df = pd.read_csv(file, delimiter=best_delimiter, encoding=detected_encoding,
+                           on_bad_lines='skip', engine='python')
+            return df
+        except Exception:
+            pass
+        
+        try:
+            # Try with no header
+            file.seek(0)
+            df = pd.read_csv(file, delimiter=best_delimiter, encoding=detected_encoding,
+                           header=None, on_bad_lines='skip', engine='python')
+            return df
+        except Exception:
+            pass
+        
+        # Try different delimiters
+        for delimiter in [',', ';', '\t', '|']:
+            try:
+                file.seek(0)
+                df = pd.read_csv(file, delimiter=delimiter, encoding=detected_encoding,
+                               on_bad_lines='skip', engine='python')
+                if len(df.columns) > 1:  # Valid CSV structure
+                    return df
+            except Exception:
+                continue
+        
+        raise ValueError(f"Unable to parse CSV file {file_name}: {str(e)}")
+
+
+def validate_gsc_data(df, file_name="GSC file"):
+    """
+    Validate and clean GSC data
+    
+    Args:
+        df: DataFrame to validate
+        file_name: Name for error messages
+    
+    Returns:
+        Cleaned DataFrame
+    """
+    
+    if df is None or df.empty:
+        raise ValueError(f"{file_name} is empty")
+    
+    # Clean column names
+    df.columns = df.columns.str.strip()
+    
+    # Look for required columns
+    required_patterns = {
+        'Landing Page': ['landing page', 'url', 'page', 'landing'],
+        'Query': ['query', 'keyword', 'search term', 'term'],
+        'Clicks': ['clicks', 'click', 'sessions']
+    }
+    
+    column_mapping = {}
+    
+    for standard_name, patterns in required_patterns.items():
+        for col in df.columns:
+            col_lower = col.lower()
+            for pattern in patterns:
+                if pattern in col_lower:
+                    column_mapping[col] = standard_name
+                    break
+    
+    # Rename columns to standard names
+    df = df.rename(columns=column_mapping)
+    
+    # Check if we have the minimum required columns
+    required_cols = ['Landing Page', 'Query']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    
+    if missing_cols:
+        available_cols = list(df.columns)
+        raise ValueError(
+            f"{file_name} missing required columns: {missing_cols}. "
+            f"Available columns: {available_cols}"
+        )
+    
+    # Clean data
+    df = df.dropna(subset=['Landing Page', 'Query'])
+    df['Landing Page'] = df['Landing Page'].astype(str).str.strip()
+    df['Query'] = df['Query'].astype(str).str.strip()
+    
+    # Ensure Clicks is numeric
+    if 'Clicks' in df.columns:
+        df['Clicks'] = pd.to_numeric(df['Clicks'], errors='coerce').fillna(0)
+    else:
+        df['Clicks'] = 0
+    
+    return df
+
+
+def validate_internal_data(df, file_name="Internal HTML file"):
+    """
+    Validate and clean internal HTML data
+    
+    Args:
+        df: DataFrame to validate
+        file_name: Name for error messages
+    
+    Returns:
+        Cleaned DataFrame
+    """
+    
+    if df is None or df.empty:
+        raise ValueError(f"{file_name} is empty")
+    
+    # Clean column names
+    df.columns = df.columns.str.strip()
+    
+    # Look for URL column
+    url_column = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if any(keyword in col_lower for keyword in ['url', 'address', 'uri', 'link']):
+            url_column = col
+            break
+    
+    if not url_column:
+        available_cols = list(df.columns)
+        raise ValueError(
+            f"{file_name} missing URL column. "
+            f"Available columns: {available_cols}"
+        )
+    
+    # Clean data
+    df = df.dropna(subset=[url_column])
+    df[url_column] = df[url_column].astype(str).str.strip()
+    
+    # Filter for HTTP URLs
+    df = df[df[url_column].str.contains('http', case=False, na=False)]
+    
+    return df
+
 
 def get_ai_insights(results_df, openai_api_key, business_goal="", target_audience=""):
     """Generate AI-powered insights using OpenAI"""
@@ -163,8 +377,7 @@ def get_ai_insights(results_df, openai_api_key, business_goal="", target_audienc
             })
         
         # Create enhanced prompt
-        prompt = f"""
-You are an expert SEO Strategist specializing in identifying and resolving content cannibalization issues. Your goal is to transform raw cannibalization data into a strategic, actionable executive report that a marketing team can implement to improve organic search performance.
+        prompt = f"""You are an expert SEO Strategist specializing in identifying and resolving content cannibalization issues. Your goal is to transform raw cannibalization data into a strategic, actionable executive report that a marketing team can implement to improve organic search performance.
 
 **Website Context:**
 * **Business Goal:** {business_goal if business_goal else "[Not specified - assume general organic traffic growth]"}
@@ -211,17 +424,15 @@ You are an expert SEO Strategist specializing in identifying and resolving conte
 **Tone and Formatting:**
 * **Tone:** Be professional, data-driven, and authoritative.
 * **Formatting:** Use Markdown for clarity. Employ **bolding** for key terms and use tables where requested to ensure the report is scannable and actionable.
-* **Constraint:** Do not simply restate the data from the JSON. Your value is in the interpretation, strategic insights, and actionable recommendations.
-"""
+* **Constraint:** Do not simply restate the data from the JSON. Your value is in the interpretation, strategic insights, and actionable recommendations."""
         
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are an expert SEO consultant specializing in content strategy and cannibalization issues. Provide strategic, actionable insights based on data analysis."},
+                {"role": "system", "content": "You are an expert SEO consultant specializing in content strategy and cannibalization issues. Provide actionable insights."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7,
-            max_tokens=2500
+            max_tokens=2000
         )
         
         return response.choices[0].message.content
@@ -229,404 +440,239 @@ You are an expert SEO Strategist specializing in identifying and resolving conte
     except Exception as e:
         return f"Error generating AI insights: {str(e)}"
 
-# Main app logic
-def main():
-    # File upload section
-    col1, col2 = st.columns(2)
 
+def main():
+    """Main application function"""
+    
+    # File upload section
+    st.markdown("### 📁 Upload Your Data")
+    
+    col1, col2 = st.columns(2)
+    
     with col1:
         internal_file = st.file_uploader(
             "Upload Internal HTML Report (CSV)",
-            type=['csv'],
-            help="Should contain URLs, titles, H1s, meta descriptions, etc."
+            type=['csv', 'txt'],
+            help="Upload your Screaming Frog or similar internal HTML report"
         )
-
+    
     with col2:
         gsc_file = st.file_uploader(
-            "Upload GSC Report (CSV)",
-            type=['csv'],
-            help="Should contain queries and landing pages"
+            "Upload Google Search Console Report (CSV)",
+            type=['csv', 'txt'],
+            help="Upload your GSC performance report with queries and landing pages"
         )
-
+    
     if internal_file and gsc_file:
-        with st.spinner('Loading files...'):
-            # Load internal HTML data
-            try:
-                # Try semicolon delimiter first (common in SEO tools)
-                internal_df = pd.read_csv(internal_file, sep=';', encoding='utf-8')
-            except:
-                # Fallback to comma delimiter
-                internal_df = pd.read_csv(internal_file, encoding='utf-8')
-            
-            # Load GSC data
-            gsc_df = pd.read_csv(gsc_file, encoding='utf-8')
-        
-        st.success(f"✅ Files loaded successfully!")
-        
-        # Display basic info
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Total URLs (Internal HTML)", len(internal_df))
-        with col2:
-            st.metric("Total Queries (GSC)", len(gsc_df))
-        
-        # Process GSC data to aggregate queries by URL
-        with st.spinner('Processing GSC data...'):
-            # Clean column names
-            gsc_df.columns = gsc_df.columns.str.strip()
-            
-            # Aggregate queries by landing page
-            url_queries = {}
-            for _, row in gsc_df.iterrows():
-                url = row.get('Landing Page', row.get('URL', ''))
-                query = row.get('Query', '')
-                clicks = row.get('Clicks', row.get(' Clicks ', 0))
+        try:
+            with st.spinner("Processing your files..."):
+                # Use robust CSV reader for both files
+                internal_df = robust_csv_reader(internal_file, internal_file.name)
+                internal_df = validate_internal_data(internal_df, internal_file.name)
                 
-                if url and query:
-                    if url not in url_queries:
-                        url_queries[url] = []
-                    url_queries[url].append({
-                        'query': query,
-                        'clicks': clicks
-                    })
-        
-        # Identify column names dynamically
-        with st.spinner('Analyzing data structure...'):
-            # Find URL column
-            url_column = None
-            for col in internal_df.columns:
-                if 'address' in col.lower() or 'url' in col.lower():
-                    url_column = col
-                    break
-            
-            # Find other relevant columns
-            title_column = next((col for col in internal_df.columns if 'Title 1' in col or 'title' in col.lower()), None)
-            h1_column = next((col for col in internal_df.columns if 'H1-1' in col or 'h1' in col.lower()), None)
-            meta_column = next((col for col in internal_df.columns if 'Meta Description' in col or 'meta description' in col.lower()), None)
-            embedding_column = next((col for col in internal_df.columns if 'embedding' in col.lower()), None)
-            
-            st.info(f"Detected columns - URL: {url_column}, Title: {title_column}, H1: {h1_column}")
-        
-        # Filter for valid URLs
-        if url_column:
-            # Keep only HTTP/HTTPS URLs
-            internal_df = internal_df[internal_df[url_column].str.contains('http', na=False)]
-            internal_df = internal_df[~internal_df[url_column].str.contains('redirect', na=False, case=False)]
-            
-            # Remove URLs with parameters
-            internal_df['is_clean'] = internal_df[url_column].apply(is_clean_url)
-            excluded_urls = len(internal_df[~internal_df['is_clean']])
-            internal_df = internal_df[internal_df['is_clean']].drop('is_clean', axis=1)
-            
-            st.metric("Valid URLs for analysis", len(internal_df))
-            if excluded_urls > 0:
-                st.warning(f"Excluded {excluded_urls} URLs with parameters (?, &, #, etc.)")
-        
-        # Process similarity analysis
-        with st.spinner('Calculating multi-dimensional similarity...'):
-            results = []
-            urls = internal_df[url_column].tolist()
-            n = len(urls)
-            
-            # Prepare data for each URL
-            url_data = {}
-            for idx, row in internal_df.iterrows():
-                url = row[url_column]
-                url_data[url] = {
-                    'title': clean_text(row.get(title_column, '')) if title_column else '',
-                    'h1': clean_text(row.get(h1_column, '')) if h1_column else '',
-                    'meta': clean_text(row.get(meta_column, '')) if meta_column else '',
-                    'queries': [q['query'] for q in url_queries.get(url, [])],
-                    'intent': detect_intent_from_title(row.get(title_column, '')) if title_column else 'unknown',
-                    'embedding': row.get(embedding_column, '') if embedding_column else ''
-                }
-            
-            # Calculate similarity matrices
-            titles = [url_data[url]['title'] for url in urls]
-            h1s = [url_data[url]['h1'] for url in urls]
-            metas = [url_data[url]['meta'] for url in urls]
-            
-            # Text-based similarities
-            title_sim_matrix = calculate_text_similarity(titles, titles)
-            h1_sim_matrix = calculate_text_similarity(h1s, h1s)
-            meta_sim_matrix = calculate_text_similarity(metas, metas)
-            
-            # Embedding similarity (if available)
-            embedding_sim_matrix = None
-            if embedding_column:
-                embeddings = []
-                valid_embedding_indices = []
+                gsc_df = robust_csv_reader(gsc_file, gsc_file.name)
+                gsc_df = validate_gsc_data(gsc_df, gsc_file.name)
                 
-                for idx, url in enumerate(urls):
-                    try:
-                        embedding_str = url_data[url]['embedding']
-                        if embedding_str and not pd.isna(embedding_str):
-                            embedding = np.array([float(x) for x in str(embedding_str).split(',')])
-                            embeddings.append(embedding)
-                            valid_embedding_indices.append(idx)
-                    except:
-                        pass
+                st.success("✅ Files loaded successfully!")
                 
-                if embeddings:
-                    embeddings = np.array(embeddings)
-                    embedding_sim_matrix = cosine_similarity(embeddings)
-            
-            # Calculate results for each pair
-            for i in range(n):
-                for j in range(i + 1, n):
-                    url1 = urls[i]
-                    url2 = urls[j]
-                    
-                    # Skip if same domain path
-                    if url1 == url2:
-                        continue
-                    
-                    # Get similarities
-                    title_sim = title_sim_matrix[i, j] * 100
-                    h1_sim = h1_sim_matrix[i, j] * 100
-                    meta_sim = meta_sim_matrix[i, j] * 100
-                    
-                    # Keyword overlap
-                    queries1 = url_data[url1]['queries']
-                    queries2 = url_data[url2]['queries']
-                    keyword_overlap = calculate_keyword_overlap(queries1, queries2) * 100
-                    
-                    # Embedding similarity
-                    embedding_sim = 0
-                    if embedding_sim_matrix is not None and i in valid_embedding_indices and j in valid_embedding_indices:
-                        idx_i = valid_embedding_indices.index(i)
-                        idx_j = valid_embedding_indices.index(j)
-                        embedding_sim = embedding_sim_matrix[idx_i, idx_j] * 100
-                    
-                    # Calculate composite score
-                    # Weighted heavily towards title and H1 for SEO impact
-                    weights = {
-                        'title': 0.35,
-                        'h1': 0.25,
-                        'meta': 0.15,
-                        'keyword': 0.15,
-                        'embedding': 0.10
-                    }
-                    
-                    composite_score = (
-                        weights['title'] * title_sim +
-                        weights['h1'] * h1_sim +
-                        weights['meta'] * meta_sim +
-                        weights['keyword'] * keyword_overlap +
-                        weights['embedding'] * embedding_sim
-                    )
-                    
-                    # Intent matching
-                    intent1 = url_data[url1]['intent']
-                    intent2 = url_data[url2]['intent']
-                    same_intent = intent1 == intent2
-                    
-                    results.append({
-                        'URL_1': url1,
-                        'URL_2': url2,
-                        'Composite_Score': round(composite_score, 1),
-                        'Title_Similarity': round(title_sim, 1),
-                        'H1_Similarity': round(h1_sim, 1),
-                        'Meta_Similarity': round(meta_sim, 1),
-                        'Keyword_Overlap': round(keyword_overlap, 1),
-                        'Embedding_Similarity': round(embedding_sim, 1),
-                        'Intent_1': intent1,
-                        'Intent_2': intent2,
-                        'Same_Intent': same_intent,
-                        'Risk_Level': 'High' if composite_score > 80 and same_intent else 'Medium' if composite_score > 60 else 'Low'
-                    })
-            
-            results_df = pd.DataFrame(results)
-            results_df = results_df.sort_values('Composite_Score', ascending=False)
-        
-        st.success(f"✅ Analysis complete! Analyzed {len(results_df):,} URL pairs")
-        
-        # Summary statistics
-        st.markdown("### 📊 Cannibalization Risk Overview")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            high_risk = len(results_df[results_df['Risk_Level'] == 'High'])
-            st.metric("High Risk Pairs", high_risk, help="Same intent + >80% similarity")
-        
-        with col2:
-            medium_risk = len(results_df[results_df['Risk_Level'] == 'Medium'])
-            st.metric("Medium Risk Pairs", medium_risk, help="60-80% similarity")
-        
-        with col3:
-            avg_composite = results_df['Composite_Score'].mean()
-            st.metric("Avg Composite Score", f"{avg_composite:.1f}%")
-        
-        with col4:
-            same_intent_high = len(results_df[(results_df['Same_Intent']) & (results_df['Composite_Score'] > 70)])
-            st.metric("Same Intent >70%", same_intent_high)
-        
-        # Detailed Analysis Tabs
-        if openai_api_key:
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(["🚨 High Risk Pairs", "📊 All Results", "🎯 By Intent", "🤖 AI Insights", "📥 Download"])
-        else:
-            tab1, tab2, tab3, tab4 = st.tabs(["🚨 High Risk Pairs", "📊 All Results", "🎯 By Intent", "📥 Download"])
-        
-        with tab1:
-            st.markdown("### High Risk Cannibalization Candidates")
-            high_risk_df = results_df[results_df['Risk_Level'] == 'High'].head(50)
-            
-            if len(high_risk_df) > 0:
-                # Format for display
-                display_df = high_risk_df[['URL_1', 'URL_2', 'Composite_Score', 'Title_Similarity', 
-                                           'H1_Similarity', 'Keyword_Overlap', 'Intent_1', 'Intent_2']].copy()
-                
-                # Add percentage signs
-                for col in ['Composite_Score', 'Title_Similarity', 'H1_Similarity', 'Keyword_Overlap']:
-                    display_df[col] = display_df[col].astype(str) + '%'
-                
-                st.dataframe(display_df, use_container_width=True, height=400)
-            else:
-                st.info("No high-risk cannibalization pairs found. Your content is well-differentiated!")
-        
-        with tab2:
-            st.markdown("### All URL Pairs Analysis")
-            
-            # Filters
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                min_composite = st.slider("Min Composite Score %", 0, 100, 50)
-            with col2:
-                risk_filter = st.multiselect("Risk Levels", ['High', 'Medium', 'Low'], default=['High', 'Medium'])
-            with col3:
-                intent_filter = st.checkbox("Same intent only", value=False)
-            
-            # Apply filters
-            filtered_df = results_df[
-                (results_df['Composite_Score'] >= min_composite) &
-                (results_df['Risk_Level'].isin(risk_filter))
-            ]
-            
-            if intent_filter:
-                filtered_df = filtered_df[filtered_df['Same_Intent']]
-            
-            # Display
-            st.metric("Filtered Results", len(filtered_df))
-            
-            display_cols = ['URL_1', 'URL_2', 'Composite_Score', 'Title_Similarity', 
-                           'H1_Similarity', 'Meta_Similarity', 'Keyword_Overlap', 'Risk_Level']
-            
-            display_df = filtered_df[display_cols].head(100).copy()
-            for col in ['Composite_Score', 'Title_Similarity', 'H1_Similarity', 'Meta_Similarity', 'Keyword_Overlap']:
-                display_df[col] = display_df[col].astype(str) + '%'
-            
-            st.dataframe(display_df, use_container_width=True, height=400)
-        
-        with tab3:
-            st.markdown("### Analysis by Intent Type")
-            
-            # Intent distribution
-            intent_counts = pd.concat([
-                results_df['Intent_1'].value_counts(),
-                results_df['Intent_2'].value_counts()
-            ]).groupby(level=0).sum().sort_values(ascending=False)
-            
-            col1, col2 = st.columns([1, 2])
-            
-            with col1:
-                st.markdown("**Intent Distribution:**")
-                for intent, count in intent_counts.items():
-                    st.write(f"- {intent}: {count}")
-            
-            with col2:
-                # Same intent high similarity
-                same_intent_issues = results_df[
-                    (results_df['Same_Intent']) & 
-                    (results_df['Composite_Score'] > 70)
-                ].groupby('Intent_1').size().sort_values(ascending=False)
-                
-                st.markdown("**Cannibalization by Intent:**")
-                for intent, count in same_intent_issues.items():
-                    st.write(f"- {intent}: {count} high-similarity pairs")
-        
-        # AI Insights tab (if API key provided)
-        if openai_api_key:
-            with tab4:
-                st.markdown("### 🤖 AI-Powered Analysis & Recommendations")
-                
-                # Context inputs for better AI analysis
+                # Display file info
                 col1, col2 = st.columns(2)
                 with col1:
-                    business_goal = st.text_input(
-                        "Business Goal (Optional)",
-                        placeholder="e.g., Generate qualified B2B leads",
-                        help="Helps AI tailor recommendations to your specific objectives"
-                    )
-                
+                    st.metric("Internal URLs", len(internal_df))
                 with col2:
-                    target_audience = st.text_input(
-                        "Target Audience (Optional)",
-                        placeholder="e.g., CMOs at mid-size tech companies",
-                        help="Helps AI understand user intent and content priorities"
-                    )
+                    st.metric("GSC Queries", len(gsc_df))
                 
-                if st.button("Generate AI Insights", type="primary"):
-                    with st.spinner("Analyzing your content with AI... This may take a moment."):
-                        ai_insights = get_ai_insights(results_df, openai_api_key, business_goal, target_audience)
-                        
-                        if "Error" in ai_insights:
-                            st.error(ai_insights)
-                        else:
-                            # Display AI insights in a nice format
-                            st.markdown(ai_insights)
-                            
-                            # Option to download AI insights
-                            st.download_button(
-                                label="📥 Download AI Insights",
-                                data=ai_insights,
-                                file_name=f"ai_seo_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                                mime="text/markdown"
+                # Find URL column in internal data
+                url_column = None
+                for col in internal_df.columns:
+                    if any(keyword in col.lower() for keyword in ['url', 'address', 'uri', 'link']):
+                        url_column = col
+                        break
+                
+                if not url_column:
+                    st.error("Could not find URL column in internal data")
+                    return
+                
+                # Prepare data for analysis
+                internal_df = internal_df.rename(columns={url_column: 'URL'})
+                
+                # Get unique URLs from GSC
+                gsc_urls = gsc_df['Landing Page'].unique()
+                
+                # Filter internal data to only include URLs present in GSC
+                internal_df = internal_df[internal_df['URL'].isin(gsc_urls)]
+                
+                if len(internal_df) < 2:
+                    st.warning("Need at least 2 URLs to analyze cannibalization")
+                    return
+                
+                # Find title, h1, and meta description columns
+                title_col = None
+                h1_col = None
+                meta_col = None
+                
+                for col in internal_df.columns:
+                    col_lower = col.lower()
+                    if 'title' in col_lower and '1' in col_lower:
+                        title_col = col
+                    elif 'h1' in col_lower and '1' in col_lower:
+                        h1_col = col
+                    elif 'meta' in col_lower and 'description' in col_lower:
+                        meta_col = col
+                
+                # Create analysis data
+                urls = internal_df['URL'].tolist()
+                titles = [clean_text(internal_df[internal_df['URL'] == url][title_col].iloc[0] if title_col and title_col in internal_df.columns else "") for url in urls]
+                h1s = [clean_text(internal_df[internal_df['URL'] == url][h1_col].iloc[0] if h1_col and h1_col in internal_df.columns else "") for url in urls]
+                metas = [clean_text(internal_df[internal_df['URL'] == url][meta_col].iloc[0] if meta_col and meta_col in internal_df.columns else "") for url in urls]
+                
+                # Get keywords for each URL from GSC
+                url_keywords = {}
+                for url in urls:
+                    keywords = gsc_df[gsc_df['Landing Page'] == url]['Query'].tolist()
+                    url_keywords[url] = keywords
+                
+                # Calculate similarities
+                title_sim = calculate_text_similarity(titles, titles)
+                h1_sim = calculate_text_similarity(h1s, h1s)
+                meta_sim = calculate_text_similarity(metas, metas)
+                
+                # Calculate keyword overlap
+                keyword_overlaps = []
+                for i, url1 in enumerate(urls):
+                    overlaps = []
+                    for j, url2 in enumerate(urls):
+                        if i != j:
+                            overlap = calculate_keyword_overlap(
+                                url_keywords.get(url1, []),
+                                url_keywords.get(url2, [])
                             )
+                            overlaps.append(overlap)
+                        else:
+                            overlaps.append(0.0)
+                    keyword_overlaps.append(overlaps)
                 
-                st.info("""
-                💡 **What the AI analyzes:**
-                - Executive summary with severity assessment
-                - Top 5 priority actions in table format
-                - Content consolidation plan with winner/loser URLs
-                - Quick wins requiring minimal effort
-                - Long-term prevention strategies
-                """)
-            
-            # Download tab is now tab5 when AI is enabled
-            download_tab = tab5
-        else:
-            # Download tab is tab4 when AI is not enabled
-            download_tab = tab4
-        
-        with download_tab:
-            st.markdown("### Download Complete Analysis")
-            
-            # Prepare download data
-            download_df = results_df.copy()
-            
-            # Convert to CSV
-            csv_buffer = io.StringIO()
-            download_df.to_csv(csv_buffer, index=False)
-            csv_data = csv_buffer.getvalue()
-            
-            # Generate filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"enhanced_cannibalization_analysis_{timestamp}.csv"
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.download_button(
-                    label="📥 Download Full Analysis (CSV)",
-                    data=csv_data,
-                    file_name=filename,
-                    mime="text/csv",
-                    help="Contains all URL pairs with individual similarity scores and risk levels"
-                )
-            
-            with col2:
-                # Create summary report
-                summary = f"""
+                keyword_overlap = np.array(keyword_overlaps)
+                
+                # Create results dataframe
+                results = []
+                for i in range(len(urls)):
+                    for j in range(i + 1, len(urls)):
+                        # Calculate composite score with weights
+                        title_score = title_sim[i][j] * 100
+                        h1_score = h1_sim[i][j] * 100
+                        meta_score = meta_sim[i][j] * 100
+                        keyword_score = keyword_overlap[i][j] * 100
+                        
+                        # Weighted composite score
+                        composite_score = (
+                            title_score * 0.35 +
+                            h1_score * 0.25 +
+                            meta_score * 0.15 +
+                            keyword_score * 0.15 +
+                            0  # Semantic similarity placeholder
+                        )
+                        
+                        # Determine risk level
+                        intent1 = detect_intent_from_title(titles[i])
+                        intent2 = detect_intent_from_title(titles[j])
+                        same_intent = intent1 == intent2
+                        
+                        if composite_score >= 80 and same_intent:
+                            risk_level = 'High'
+                        elif composite_score >= 60:
+                            risk_level = 'Medium'
+                        else:
+                            risk_level = 'Low'
+                        
+                        results.append({
+                            'URL_1': urls[i],
+                            'URL_2': urls[j],
+                            'Title_Similarity': round(title_score, 1),
+                            'H1_Similarity': round(h1_score, 1),
+                            'Meta_Similarity': round(meta_score, 1),
+                            'Keyword_Overlap': round(keyword_score, 1),
+                            'Composite_Score': round(composite_score, 1),
+                            'Risk_Level': risk_level,
+                            'Intent_1': intent1,
+                            'Intent_2': intent2,
+                            'Same_Intent': same_intent
+                        })
+                
+                results_df = pd.DataFrame(results)
+                
+                if results_df.empty:
+                    st.warning("No cannibalization pairs found")
+                    return
+                
+                # Sort by composite score descending
+                results_df = results_df.sort_values('Composite_Score', ascending=False)
+                
+                # Display results
+                st.markdown("### 📊 Analysis Results")
+                
+                # Summary metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Pairs", len(results_df))
+                with col2:
+                    st.metric("High Risk", len(results_df[results_df['Risk_Level'] == 'High']))
+                with col3:
+                    st.metric("Avg Score", f"{results_df['Composite_Score'].mean():.1f}%")
+                
+                # Create tabs
+                tabs = st.tabs(["📈 Results", "🔍 Details", "📥 Download"])
+                
+                with tabs[0]:
+                    st.markdown("#### Cannibalization Risk Overview")
+                    
+                    # Risk level distribution
+                    risk_counts = results_df['Risk_Level'].value_counts()
+                    st.bar_chart(risk_counts)
+                    
+                    # Top risks
+                    st.markdown("#### Top 10 Highest Risk Pairs")
+                    top_risks = results_df.head(10)
+                    
+                    for _, row in top_risks.iterrows():
+                        with st.expander(f"{row['URL_1']} vs {row['URL_2']} ({row['Composite_Score']}%)"):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write("**URL 1:**", row['URL_1'])
+                                st.write("**Intent:**", row['Intent_1'])
+                            with col2:
+                                st.write("**URL 2:**", row['URL_2'])
+                                st.write("**Intent:**", row['Intent_2'])
+                            
+                            st.write("**Similarity Scores:**")
+                            st.write(f"- Title: {row['Title_Similarity']}%")
+                            st.write(f"- H1: {row['H1_Similarity']}%")
+                            st.write(f"- Meta: {row['Meta_Similarity']}%")
+                            st.write(f"- Keywords: {row['Keyword_Overlap']}%")
+                
+                with tabs[1]:
+                    st.markdown("#### Detailed Results")
+                    st.dataframe(results_df, use_container_width=True)
+                
+                with tabs[2]:
+                    st.markdown("#### Download Results")
+                    
+                    # CSV download
+                    csv_buffer = io.StringIO()
+                    results_df.to_csv(csv_buffer, index=False)
+                    csv_data = csv_buffer.getvalue()
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    
+                    st.download_button(
+                        label="📥 Download Full Analysis (CSV)",
+                        data=csv_data,
+                        file_name=f"cannibalization_analysis_{timestamp}.csv",
+                        mime="text/csv"
+                    )
+                    
+                    # Summary report
+                    summary = f"""
 CONTENT CANNIBALIZATION ANALYSIS SUMMARY
 Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 
@@ -638,40 +684,56 @@ OVERVIEW:
 
 TOP CANNIBALIZATION RISKS:
 """
-                for idx, row in results_df.head(10).iterrows():
-                    summary += f"\n{row['URL_1']}\n  vs {row['URL_2']}\n  Score: {row['Composite_Score']}% | Risk: {row['Risk_Level']}\n"
+                    for _, row in results_df.head(10).iterrows():
+                        summary += f"\n{row['URL_1']}\n  vs {row['URL_2']}\n  Score: {row['Composite_Score']}% | Risk: {row['Risk_Level']}\n"
+                    
+                    st.download_button(
+                        label="📄 Download Summary Report (TXT)",
+                        data=summary,
+                        file_name=f"cannibalization_summary_{timestamp}.txt",
+                        mime="text/plain"
+                    )
                 
-                st.download_button(
-                    label="📄 Download Summary Report (TXT)",
-                    data=summary,
-                    file_name=f"cannibalization_summary_{timestamp}.txt",
-                    mime="text/plain"
-                )
-        
-        # Insights section
-        st.markdown("### 💡 Key Insights")
-        
-        # Calculate insights
-        very_high_title_sim = len(results_df[results_df['Title_Similarity'] > 90])
-        high_keyword_overlap = len(results_df[results_df['Keyword_Overlap'] > 70])
-        
-        insights = []
-        
-        if very_high_title_sim > 0:
-            insights.append(f"⚠️ Found {very_high_title_sim} URL pairs with >90% title similarity - consider differentiating titles")
-        
-        if high_keyword_overlap > 0:
-            insights.append(f"🎯 {high_keyword_overlap} URL pairs target very similar keywords - review search intent")
-        
-        if len(results_df[results_df['Risk_Level'] == 'High']) > 10:
-            insights.append("🚨 Multiple high-risk cannibalization issues detected - prioritize content consolidation or differentiation")
-        
-        if insights:
-            for insight in insights:
-                st.info(insight)
-        else:
-            st.success("✅ Your content appears well-differentiated with minimal cannibalization risk!")
-
+                # AI Insights
+                if openai_api_key:
+                    st.markdown("### 🤖 AI-Powered Insights")
+                    
+                    business_goal = st.text_input(
+                        "Business Goal (optional)",
+                        placeholder="e.g., Increase organic traffic for SaaS product pages"
+                    )
+                    
+                    target_audience = st.text_input(
+                        "Target Audience (optional)",
+                        placeholder="e.g., Small business owners looking for CRM software"
+                    )
+                    
+                    if st.button("Generate AI Report", type="primary"):
+                        with st.spinner("Generating AI insights..."):
+                            ai_insights = get_ai_insights(
+                                results_df, 
+                                openai_api_key, 
+                                business_goal, 
+                                target_audience
+                            )
+                            
+                            if "Error" not in str(ai_insights):
+                                st.markdown(ai_insights)
+                                
+                                # Download AI report
+                                st.download_button(
+                                    label="📥 Download AI Report",
+                                    data=ai_insights,
+                                    file_name=f"ai_seo_report_{timestamp}.md",
+                                    mime="text/markdown"
+                                )
+                            else:
+                                st.error(ai_insights)
+                
+        except Exception as e:
+            st.error(f"Error processing files: {str(e)}")
+            st.info("Please check your file formats and try again.")
+    
     else:
         # Instructions
         st.info("""
@@ -689,36 +751,7 @@ TOP CANNIBALIZATION RISKS:
            - Add in the sidebar for AI-powered insights
            - Get your key at: https://platform.openai.com/api-keys
         """)
-        
-        with st.expander("📖 How this enhanced analysis works"):
-            st.markdown("""
-            This tool goes beyond simple embedding similarity by analyzing:
-            
-            **1. Title Similarity (35% weight)**
-            - Most important for SEO cannibalization
-            - High similarity = competing for same SERP positions
-            
-            **2. H1 Similarity (25% weight)**  
-            - Key on-page signal for topic focus
-            - Should be unique across pages
-            
-            **3. Meta Description Similarity (15% weight)**
-            - Indicates SERP presentation overlap
-            - Important for click-through rates
-            
-            **4. Keyword/Query Overlap (15% weight)**
-            - Based on actual GSC data
-            - Shows real search competition
-            
-            **5. Semantic Similarity (10% weight)**
-            - Overall content theme alignment
-            - Least weighted for niche sites
-            
-            **Risk Levels:**
-            - **High**: Same intent + >80% composite score
-            - **Medium**: 60-80% composite score  
-            - **Low**: <60% composite score
-            """)
+
 
 # Footer
 st.markdown("---")
