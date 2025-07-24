@@ -5,3 +5,4 @@ scikit-learn
 openpyxl
 openai
 jinja2
+chardet
