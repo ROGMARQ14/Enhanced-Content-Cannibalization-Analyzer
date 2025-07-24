@@ -129,7 +129,7 @@ class DataLoader:
     
     @staticmethod
     def validate_seo_data(df: pd.DataFrame, data_type: str) -> Dict[str, Any]:
-        """Validate SEO data structure."""
+        """Validate SEO data structure with enhanced column detection."""
         validation = {
             'valid': True,
             'issues': [],
@@ -146,74 +146,152 @@ class DataLoader:
         
         columns = df.columns.tolist()
         
+        # Log available columns for debugging
+        logger.info(f"Available columns for {data_type}: {columns}")
+        
         if data_type == 'internal':
-            # Find URL column
-            url_candidates = ['url', 'address', 'page', 'uri', 'link']
+            # Enhanced URL column detection
+            url_patterns = [
+                'url', 'address', 'page', 'uri', 'link', 'path', 'location',
+                'webpage', 'site', 'href', 'canonical', 'permalink'
+            ]
             for col in columns:
-                if any(candidate in col for candidate in url_candidates):
+                col_lower = col.lower()
+                if any(pattern in col_lower for pattern in url_patterns):
                     validation['url_column'] = col
                     break
+            
+            if not validation['url_column']:
+                # Try exact match first
+                for col in columns:
+                    if col.lower() in ['url', 'address', 'page']:
+                        validation['url_column'] = col
+                        break
             
             if not validation['url_column']:
                 validation['valid'] = False
                 validation['issues'].append("No URL column found")
             
-            # Find Title column
-            title_candidates = ['title', 'title1', 'page title', 'meta title']
+            # Enhanced Title column detection
+            title_patterns = [
+                'title', 'page title', 'meta title', 'seo title', 'browser title',
+                'titulo', 'titre', 'titel', 'og:title', 'twitter:title'
+            ]
             for col in columns:
-                if any(candidate in col for candidate in title_candidates):
+                col_lower = col.lower()
+                if any(pattern in col_lower for pattern in title_patterns):
                     validation['title_column'] = col
                     break
+            
+            if not validation['title_column']:
+                # Try exact match
+                for col in columns:
+                    if col.lower() in ['title', 'title1', 'title 1']:
+                        validation['title_column'] = col
+                        break
             
             if not validation['title_column']:
                 validation['valid'] = False
                 validation['issues'].append("No Title column found")
             
-            # Find H1 column
-            h1_candidates = ['h1', 'h1-1', 'heading1', 'header1']
+            # Enhanced H1 column detection
+            h1_patterns = [
+                'h1', 'heading1', 'header1', 'main heading', 'primary heading',
+                'h1 tag', 'h1-1', 'h1_1', 'heading 1'
+            ]
             for col in columns:
-                if any(candidate in col for candidate in h1_candidates):
+                col_lower = col.lower()
+                if any(pattern in col_lower for pattern in h1_patterns):
                     validation['h1_column'] = col
                     break
+            
+            if not validation['h1_column']:
+                # Try exact match
+                for col in columns:
+                    if col.lower() in ['h1', 'h1-1', 'h1_1']:
+                        validation['h1_column'] = col
+                        break
             
             if not validation['h1_column']:
                 validation['valid'] = False
                 validation['issues'].append("No H1 column found")
             
-            # Find Meta Description column (optional)
-            meta_candidates = [
-                'meta description', 'meta desc', 'description',
-                'meta_description'
+            # Enhanced Meta Description column detection (optional)
+            meta_patterns = [
+                'meta description', 'meta desc', 'description', 'meta_description',
+                'meta-desc', 'meta:description', 'og:description', 'twitter:description',
+                'seo description', 'snippet', 'summary'
             ]
             for col in columns:
-                if any(candidate in col for candidate in meta_candidates):
+                col_lower = col.lower()
+                if any(pattern in col_lower for pattern in meta_patterns):
                     validation['meta_column'] = col
                     break
         
         elif data_type == 'gsc':
-            # Find URL/Page column
-            url_candidates = ['url', 'page', 'landing page', 'landing_page']
+            # Enhanced URL/Page column detection for GSC
+            url_patterns = [
+                'url', 'page', 'landing page', 'landing_page', 'landingpage',
+                'webpage', 'site', 'path', 'location', 'uri', 'link', 'href',
+                'canonical', 'permalink', 'address'
+            ]
             for col in columns:
-                if any(candidate in col for candidate in url_candidates):
+                col_lower = col.lower()
+                if any(pattern in col_lower for pattern in url_patterns):
                     validation['url_column'] = col
                     break
+            
+            if not validation['url_column']:
+                # Try exact match
+                for col in columns:
+                    if col.lower() in ['url', 'page', 'landing page']:
+                        validation['url_column'] = col
+                        break
             
             if not validation['url_column']:
                 validation['valid'] = False
                 validation['issues'].append("No URL/Page column found")
             
-            # Find Query column
-            query_candidates = [
-                'query', 'keyword', 'search term', 'search_term'
+            # Enhanced Query column detection for GSC
+            query_patterns = [
+                'query', 'keyword', 'search term', 'search_term', 'searchterm',
+                'search query', 'searchquery', 'key word', 'keyterm', 'term',
+                'search phrase', 'phrase', 'search', 'keywords'
             ]
             for col in columns:
-                if any(candidate in col for candidate in query_candidates):
+                col_lower = col.lower()
+                if any(pattern in col_lower for pattern in query_patterns):
                     validation['title_column'] = col
                     break
             
             if not validation['title_column']:
+                # Try exact match
+                for col in columns:
+                    if col.lower() in ['query', 'keyword', 'search term']:
+                        validation['title_column'] = col
+                        break
+            
+            if not validation['title_column']:
                 validation['valid'] = False
                 validation['issues'].append("No Query column found")
+        
+        # Provide helpful suggestions
+        if not validation['valid']:
+            validation['suggestions'] = {
+                'available_columns': columns,
+                'expected_patterns': {
+                    'internal': {
+                        'url': ['url', 'address', 'page', 'uri', 'link'],
+                        'title': ['title', 'page title', 'meta title'],
+                        'h1': ['h1', 'heading1', 'header1'],
+                        'meta': ['meta description', 'description', 'meta desc']
+                    },
+                    'gsc': {
+                        'url': ['url', 'page', 'landing page', 'landing_page'],
+                        'query': ['query', 'keyword', 'search term', 'search_term']
+                    }
+                }
+            }
         
         return validation
     

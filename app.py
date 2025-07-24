@@ -14,8 +14,8 @@ import os
 # Add src directory to path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from utils.data_loader import DataLoader
-from processors.data_processor import DataProcessor
+from src.utils.data_loader import DataLoader
+from src.processors.data_processor import DataProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -60,6 +60,17 @@ def load_and_validate_files(internal_file, gsc_file):
                 f"❌ Internal data validation failed: "
                 f"{', '.join(validation['issues'])}"
             )
+            
+            # Show available columns
+            if 'suggestions' in validation:
+                st.info("📊 Available columns in your file:")
+                st.write(validation['suggestions']['available_columns'])
+                
+                st.info("🔍 Expected column patterns:")
+                st.json(validation['suggestions']['expected_patterns']['internal'])
+                
+                st.warning("💡 Please rename your columns to match these patterns")
+            
             return None, None
         
         # Load GSC data
@@ -73,6 +84,17 @@ def load_and_validate_files(internal_file, gsc_file):
                 f"❌ GSC data validation failed: "
                 f"{', '.join(gsc_validation['issues'])}"
             )
+            
+            # Show available columns
+            if 'suggestions' in gsc_validation:
+                st.info("📊 Available columns in your GSC file:")
+                st.write(gsc_validation['suggestions']['available_columns'])
+                
+                st.info("🔍 Expected column patterns:")
+                st.json(gsc_validation['suggestions']['expected_patterns']['gsc'])
+                
+                st.warning("💡 Please rename your columns to match these patterns")
+            
             return None, None
         
         st.success("✅ Both files loaded successfully!")
